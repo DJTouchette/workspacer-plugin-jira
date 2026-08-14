@@ -63,6 +63,35 @@
   }
   header h1 { font-size: 0.9rem; font-weight: 700; margin: 0; letter-spacing: 0.01em; }
   #tally { font-size: 0.72rem; color: var(--muted); }
+
+  /* ── Project identity ─────────────────────────────────────────────────────
+     Mirrors the host's ProjectMark component: a plate tinted with the project's
+     own colour, its initials or its configured emoji on it, the label beside.
+     Border OR fill, never both (DESIGN_LANGUAGE §5) — the plate carries no
+     outline. The colour itself arrives resolved from the sidecar, which mirrors
+     projectIdentity.ts; nothing about the identity is decided here. */
+  #project:empty { display: none; }
+  #project { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  #project::before {
+    content: ''; width: 1px; height: 11px; margin-right: 2px;
+    background: var(--line); flex: none;
+  }
+  .mark {
+    width: 14px; height: 14px; flex: none;
+    display: grid; place-items: center;
+    border-radius: var(--r-sm);
+    /* Two characters in a 14px box: below the scale's floor on purpose, the
+       same deliberate exception the host's mark makes. */
+    font-size: 0.44rem; font-weight: 700; line-height: 1;
+    letter-spacing: -0.02em; user-select: none;
+  }
+  /* An emoji carries its own colour and needs no plate behind it. */
+  .mark.emoji { background: transparent; font-size: 0.72rem; }
+  img.mark { object-fit: contain; }
+  #project .plabel {
+    font-size: 0.72rem; color: var(--fg2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   #freshness {
     margin-left: auto;
     font-size: 0.66rem; color: var(--faint);
@@ -344,9 +373,17 @@
   .inp.mono { font-family: var(--mono); }
   .inp:focus, .sel:focus { outline: none; border-color: var(--accent); }
   .maprow {
-    display: grid; grid-template-columns: 1fr 92px auto; gap: 6px;
+    display: grid; grid-template-columns: 1fr 92px auto auto; gap: 6px;
     align-items: center; margin-bottom: 6px;
   }
+  /* Where a mapping came from. Two sources presented as one list would be a
+     lie about which edit actually takes effect. */
+  .src {
+    font-size: 0.6rem; padding: 1px 6px; border-radius: var(--r-pill);
+    white-space: nowrap;
+  }
+  .src.host { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+  .src.legacy { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
   .maprow .rm { padding: 4px 8px; }
   .row-tools { display: flex; gap: 6px; align-items: center; margin-bottom: 12px; }
 
@@ -401,6 +438,7 @@
 <body>
 <header>
   <h1>Jira</h1>
+  <span id="project"></span>
   <span id="tally"></span>
   <span id="freshness"></span>
   <button class="icon-btn" id="editProjects" title="Map directories to Jira projects"
@@ -450,10 +488,17 @@
   </div>
   <div class="sheet-body">
     <p class="lede">
-      Tie a directory to a Jira project prefix. A pane in that directory shows only
-      that project, and <strong>Start agent</strong> knows where a ticket belongs —
-      so it works from the Overview pane too, where there is no directory of its own.
+      Tie a directory to a Jira project key. A pane in that directory shows only that
+      project, and <strong>Start agent</strong> knows where a ticket belongs — so it
+      works from the Overview pane too, where there is no directory of its own.
       Unmapped directories keep showing everything.
+    </p>
+    <p class="lede">
+      Mappings now live with the rest of a project in
+      <strong>Settings → Projects</strong>, beside its name and icon — one page per
+      project instead of one per plugin. Anything listed below as
+      <span class="src legacy">local</span> was made here before that existed and
+      still works; move it across when convenient.
     </p>
     <div id="maps"></div>
     <div class="row-tools">
@@ -575,6 +620,68 @@
     el.style.display = 'flex';
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { el.style.display = 'none'; }, 5000);
+  }
+
+  // ── Project identity ───────────────────────────────────────────────────────
+  // The pane belongs to a directory, and the host now has a first-class idea of
+  // what that directory looks like. Drawing it here is what makes a docked
+  // plugin read as part of the app instead of a page that happens to be in it.
+  //
+  // The identity (label, initials, colour, icon) is resolved by the SIDECAR —
+  // see resolveProjectIdentity in server.js, which mirrors the app's
+  // projectIdentity.ts. Nothing about it is decided in this file; all that
+  // happens here is choosing which of the three forms to paint, the way the
+  // host's own ProjectMark component chooses.
+  const brokenIcons = new Set(); // icon URLs that failed to load
+
+  function markHtml(p) {
+    // A downloaded icon never reaches this pane: the host serves those over
+    // workspacer-icon://, which is registered on Electron's default session
+    // while a plugin webview runs in the `persist:browser` partition. The
+    // sidecar therefore only ever passes an http(s) favicon, and the mark falls
+    // back to the emoji, then the initials — which is exactly what the derived
+    // mark is for.
+    const src = p.iconSrc && !brokenIcons.has(p.iconSrc) ? p.iconSrc : '';
+    if (src) {
+      return '<img class="mark" src="' + esc(src) + '" width="14" height="14" alt="" />';
+    }
+    // "Not ASCII" is what an emoji is here, and an emoji carries its own colour.
+    const isEmoji = Boolean(p.icon) && !/^[\x20-\x7e]+$/.test(p.icon);
+    const glyph = p.icon || p.initials || '?';
+    const style = isEmoji
+      ? ''
+      : ' style="background:color-mix(in srgb, ' + esc(p.color) + ' 22%, transparent);' +
+        'color:' + esc(p.color) + '"';
+    return '<span class="mark' + (isEmoji ? ' emoji' : '') + '"' + style +
+           ' aria-hidden="true">' + esc(glyph) + '</span>';
+  }
+
+  function projectHtml(p) {
+    if (!p) return '';
+    return markHtml(p) + '<span class="plabel">' + esc(p.label) + '</span>';
+  }
+
+  // The pane re-renders on every poll; the project does not change on that
+  // cadence. Rewriting the header anyway would re-create the <img> — and reload
+  // it — for a mark that is identical.
+  let paintedProject = ' ';
+
+  function paintProject(p, force) {
+    const sig = JSON.stringify(p || null);
+    if (!force && sig === paintedProject) return;
+    paintedProject = sig;
+    const el = $('project');
+    el.innerHTML = projectHtml(p);
+    el.title = p ? p.label : '';
+    // An icon host being down must not cost the mark — fall back to the derived
+    // one, as the host's ProjectMark does on a failed load.
+    const img = el.querySelector && el.querySelector('img.mark');
+    if (img && p) {
+      img.addEventListener('error', () => {
+        brokenIcons.add(p.iconSrc);
+        paintProject(p, true);
+      });
+    }
   }
 
   // ── Rendering ──────────────────────────────────────────────────────────────
@@ -728,6 +835,9 @@
       ? open + (open === 1 ? ' open' : ' open')
       : '';
     $('freshness').textContent = s.updatedAt ? ago(s.updatedAt) : '';
+    // Before the configured check: which project you are looking at is true
+    // even when there are no credentials to show a queue with.
+    paintProject(s.project);
 
     if (!s.configured) { main.innerHTML = unconfiguredHtml(); return; }
 

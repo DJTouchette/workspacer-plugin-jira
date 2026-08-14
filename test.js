@@ -7,6 +7,9 @@ const {
   DEFAULT_JQL, DEFAULT_BRIEF, BRIEF_TOKENS,
   wantsComments, formatComments, DEFAULT_BRIEFS, normalizeBriefs, slugId,
   prefixOf, normalizeProjects, dirsForIssue, issuesForCwd,
+  basenameOf, initialsOf, projectKey, resolveProjectKey, resolveProjectIdentity,
+  PROJECT_PALETTE,
+  projectsFromHostConfig, mergeProjectSources,
 } = require('./server.js');
 
 // ── adfToText ────────────────────────────────────────────────────────────────
@@ -231,6 +234,106 @@ assert.ok(!/undefined/.test(formatComments([{ body: 'anon' }])));
 assert.ok(renderBrief('{{comments}}', { key: 'X', comments: [{ author: 'Sam', body: 'Hi' }] }).includes('Hi'));
 assert.ok(/No comments/.test(renderBrief('{{comments}}', { key: 'X' })));
 
+// ── Host project identity ────────────────────────────────────────────────────
+// A PORT of workspacer's apps/desktop/src/renderer/src/lib/projectIdentity.ts
+// (and projectKey.ts). Every case below was cross-checked by running both
+// implementations over the same corpus, so a failure here means the two have
+// drifted — and a drifted mark is worse than no mark: the same directory would
+// carry two different identities inside one window.
+assert.strictEqual(basenameOf('/home/me/work/api-gateway'), 'api-gateway');
+assert.strictEqual(basenameOf('/home/me/work/api-gateway/'), 'api-gateway');
+assert.strictEqual(basenameOf('C:\\Users\\me\\repo'), 'repo');
+assert.strictEqual(basenameOf(''), '');
+
+// Word initials, not the first two letters: sibling repos sharing a prefix must
+// not both read AP.
+assert.strictEqual(initialsOf('api-gateway'), 'AG');
+assert.strictEqual(initialsOf('api-worker'), 'AW');
+assert.strictEqual(initialsOf('work_spacer'), 'WS');
+assert.strictEqual(initialsOf('my project'), 'MP');
+assert.strictEqual(initialsOf('workSpacer'), 'WS', 'a camelCase word has a second word inside it');
+assert.strictEqual(initialsOf('claudemon'), 'CL');
+assert.strictEqual(initialsOf(''), '?');
+assert.strictEqual(initialsOf('---'), '?');
+
+assert.strictEqual(projectKey('C:\\work\\repo\\'), 'C:/work/repo');
+assert.strictEqual(resolveProjectKey({ '/w/repo': {} }, '/w/repo/'), '/w/repo');
+
+// NO configuration is the case that matters: an unconfigured project is still
+// legible, which is why the mark is derived rather than looked up.
+const derived = resolveProjectIdentity('/home/me/work/api-gateway');
+assert.strictEqual(derived.label, 'api-gateway');
+assert.strictEqual(derived.initials, 'AG');
+assert.ok(PROJECT_PALETTE.includes(derived.color));
+assert.strictEqual(derived.icon, undefined);
+assert.strictEqual(derived.iconSrc, undefined);
+
+// Pinned against the host's own output for these paths. Editing the palette or
+// the FNV-1a hash on either side fails this — which is the point.
+assert.strictEqual(resolveProjectIdentity('/w/api-gateway').color, '#fb923c');
+assert.strictEqual(resolveProjectIdentity('/w/api-worker').color, '#c084fc');
+assert.strictEqual(resolveProjectIdentity('/w/repo').color, '#6b8afd');
+
+// Config overrides each part independently; a blank means unset, not "override
+// with nothing".
+const over = resolveProjectIdentity('/w/repo', {
+  '/w/repo': { label: 'Platform API', icon: '🚀', color: '#ff0000' },
+});
+assert.strictEqual(over.label, 'Platform API');
+assert.strictEqual(over.icon, '🚀');
+assert.strictEqual(over.color, '#ff0000');
+assert.strictEqual(over.initials, 'PA', 'initials follow the label, so renaming renames the mark');
+const blank = resolveProjectIdentity('/w/repo', { '/w/repo': { label: '  ', icon: '', color: '' } });
+assert.strictEqual(blank.label, 'repo');
+assert.strictEqual(blank.icon, undefined);
+assert.ok(PROJECT_PALETTE.includes(blank.color));
+
+// Keyed the way the host keys it, so the pane and the app read one entry for one
+// directory however the path was spelled.
+assert.strictEqual(resolveProjectIdentity('/w/repo/', { '/w/repo': { label: 'Kept' } }).label, 'Kept');
+assert.strictEqual(resolveProjectIdentity('\\w\\repo', { '/w/repo': { label: 'Kept' } }).label, 'Kept');
+// Colour comes from the PATH, never the label: renaming must not recolour.
+assert.strictEqual(
+  resolveProjectIdentity('/w/repo', { '/w/repo': { label: 'Something Else' } }).color,
+  resolveProjectIdentity('/w/repo').color,
+);
+
+// The one deliberate divergence from the host. A downloaded icon is served over
+// workspacer-icon://, which is registered on Electron's DEFAULT session while a
+// plugin pane's webview runs in the persist:browser partition — so that URL
+// cannot resolve in this UI and would draw a broken image. It must degrade.
+const cached = resolveProjectIdentity('/w/repo', { '/w/repo': { iconFile: 'abc123.png', icon: '🚀' } });
+assert.strictEqual(cached.iconSrc, undefined, 'workspacer-icon:// never reaches a plugin webview');
+assert.strictEqual(cached.icon, '🚀', 'a cached icon falls back to the configured emoji');
+assert.ok(
+  !JSON.stringify(resolveProjectIdentity('/w/repo', { '/w/repo': { iconFile: 'a b.png' } }))
+    .includes('workspacer-icon'),
+  'no path may put a workspacer-icon:// URL on the wire to a plugin webview',
+);
+// An http(s) favicon IS an ordinary subresource, so it is passed through — even
+// where the host would have preferred its cached copy.
+assert.strictEqual(
+  resolveProjectIdentity('/w/repo', {
+    '/w/repo': { favicon: 'https://x/icon.png', iconFile: 'abc.png' },
+  }).iconSrc,
+  'https://x/icon.png',
+);
+// …and nothing else is: a file:// or data: URL out of config must not become an
+// <img src> in a plugin pane.
+assert.strictEqual(
+  resolveProjectIdentity('/w/repo', { '/w/repo': { favicon: 'file:///etc/passwd' } }).iconSrc,
+  undefined,
+);
+
+// No directory (the Overview pane) means no mark at all, rather than a mark for
+// the empty string.
+assert.strictEqual(resolveProjectIdentity(''), null);
+assert.strictEqual(resolveProjectIdentity(undefined), null);
+// A malformed config costs the override, not the mark — config.yaml is
+// hand-editable and a bad entry must not blank the header.
+assert.strictEqual(resolveProjectIdentity('/w/repo', { '/w/repo': 'nonsense' }).label, 'repo');
+assert.strictEqual(resolveProjectIdentity('/w/repo', 'nonsense').label, 'repo');
+
 // ── newlyArrived ─────────────────────────────────────────────────────────────
 const A = { key: 'A' }, B = { key: 'B' };
 // The first successful poll BASELINES: without this, every app restart means a
@@ -242,3 +345,36 @@ assert.deepStrictEqual(newlyArrived(new Set(['A', 'B']), [A, B]), []);
 assert.deepStrictEqual(newlyArrived(new Set(['B']), [A]), [A]);
 
 console.log('ok — all Jira plugin helper tests passed');
+
+// ── Host-held mappings (the collapse onto config.projects) ───────────────────
+// The directory→prefix map was this plugin's private file. The host grew the
+// concept ("scope": "project" settings, stored beside a project's identity), so
+// the file becomes a fallback rather than the source of truth.
+{
+  const HOST = {
+    '/w/hvms': { plugins: { 'djtouchette.jira': { prefix: 'hvms', jql: 'component = api' } } },
+    '/w/other': { plugins: { 'someone.else': { prefix: 'NOPE' } } },  // another plugin's namespace
+    '/w/plain': { label: 'No plugin settings at all' },
+    '/w/blank': { plugins: { 'djtouchette.jira': { prefix: '   ' } } }, // set to nothing
+  };
+  const fromHost = projectsFromHostConfig(HOST, 'djtouchette.jira');
+  assert.deepStrictEqual(fromHost, [{ dir: '/w/hvms', prefix: 'HVMS', jql: 'component = api' }],
+    'only OUR namespace, only rows with a prefix, normalized like any other mapping');
+  assert.deepStrictEqual(projectsFromHostConfig({}, 'djtouchette.jira'), []);
+  assert.deepStrictEqual(projectsFromHostConfig(null, 'djtouchette.jira'), []);
+
+  // Host wins where both describe the same directory: editing it on the shared
+  // page has to actually change behaviour, not be shadowed by a file nobody
+  // remembers writing.
+  assert.deepStrictEqual(
+    mergeProjectSources([{ dir: '/w/a', prefix: 'NEW' }], [{ dir: '/w/a', prefix: 'OLD' }]),
+    [{ dir: '/w/a', prefix: 'NEW', jql: '' }],
+  );
+  // …and a legacy-only mapping keeps working, which is the whole point of not
+  // deleting the file on upgrade.
+  assert.deepStrictEqual(
+    mergeProjectSources([], [{ dir: '/w/z', prefix: 'LEG' }]).map((e) => e.dir),
+    ['/w/z'],
+  );
+  assert.deepStrictEqual(mergeProjectSources([], []), []);
+}

@@ -154,6 +154,86 @@ for (const [name, state] of Object.entries(SCENES)) {
   assert.ok(/<button class="start"[^>]*disabled/.test(html), 'no-cwd must disable the action');
 }
 
+// ── The project mark ─────────────────────────────────────────────────────────
+// The header says WHICH project the pane belongs to, drawn the way the app
+// draws it. The identity itself is resolved by the sidecar (see
+// resolveProjectIdentity in server.js, tested in test.js); what is pinned here
+// is the three forms the mark can take — and that the one form a plugin webview
+// cannot render never appears.
+{
+  const { sandbox, byId } = mount('index.html');
+  sandbox.render({
+    ...SCENES.full,
+    project: { label: 'api-gateway', initials: 'AG', color: '#fb923c' },
+  });
+  const html = byId('project').innerHTML;
+  assert.ok(/api-gateway/.test(html), 'the header must name the project');
+  assert.ok(/>AG</.test(html), '…and carry its derived initials');
+  assert.ok(html.includes('#fb923c'), 'the mark is tinted with the project colour');
+  assert.strictEqual(byId('project').title, 'api-gateway');
+}
+// A configured emoji replaces the initials AND drops the tinted plate — an emoji
+// carries its own colour, which is the same call the host's ProjectMark makes.
+{
+  const { sandbox, byId } = mount('index.html');
+  sandbox.render({
+    ...SCENES.full,
+    project: { label: 'Platform API', initials: 'PA', color: '#ff0000', icon: '🚀' },
+  });
+  const html = byId('project').innerHTML;
+  assert.ok(html.includes('🚀'), 'a configured emoji is the mark');
+  assert.ok(/class="mark emoji"/.test(html), 'an emoji needs no plate behind it');
+  assert.ok(!html.includes('color-mix'), 'an emoji mark must not be tinted');
+  assert.ok(!/>PA</.test(html), 'the initials are the fallback, not a second mark');
+}
+// A short letter icon is ASCII, so it keeps the plate the emoji drops.
+{
+  const { sandbox, byId } = mount('index.html');
+  sandbox.render({ ...SCENES.full, project: { label: 'Ops', initials: 'OP', color: '#38bdf8', icon: 'OI' } });
+  const html = byId('project').innerHTML;
+  assert.ok(/>OI</.test(html) && html.includes('color-mix'), 'a letter icon is still a plate');
+}
+// An http(s) favicon is an ordinary subresource and renders as an image.
+{
+  const { sandbox, byId } = mount('index.html');
+  sandbox.render({
+    ...SCENES.full,
+    project: { label: 'acme', initials: 'AC', color: '#2dd4bf', iconSrc: 'https://x/icon.png' },
+  });
+  assert.ok(/<img class="mark" src="https:\/\/x\/icon.png"/.test(byId('project').innerHTML),
+    'a remote favicon draws as an image');
+}
+// The fallback that matters: a project using a DOWNLOADED icon arrives with no
+// iconSrc at all, because workspacer-icon:// is registered on Electron's default
+// session and this webview lives in the persist:browser partition. The mark must
+// still draw, and must never emit that URL.
+{
+  const { sandbox, byId } = mount('index.html');
+  sandbox.render({ ...SCENES.full, project: { label: 'repo', initials: 'RE', color: '#6b8afd' } });
+  const html = byId('project').innerHTML;
+  assert.ok(!/<img/.test(html), 'no image without a source this webview can load');
+  assert.ok(!/workspacer-icon:/.test(html), 'workspacer-icon:// must never reach the DOM here');
+  assert.ok(/>RE</.test(html), 'the derived mark carries the pane instead');
+}
+// No project (the Overview pane, or a sidecar too old to send one) shows nothing
+// rather than an empty plate.
+{
+  const { sandbox, byId } = mount('index.html', { cwd: '' });
+  sandbox.render({ ...SCENES.full, project: null });
+  assert.strictEqual(byId('project').innerHTML, '', 'a pane with no project shows no mark');
+  const stale = mount('index.html');
+  assert.doesNotThrow(() => stale.sandbox.render(SCENES.full), 'a payload with no project must not throw');
+  assert.strictEqual(stale.byId('project').innerHTML, '');
+}
+// Unconfigured is still a project: which repo you are looking at is true even
+// with no credentials to show a queue with.
+{
+  const { sandbox, byId } = mount('index.html');
+  sandbox.render({ ...SCENES.unconfigured, project: { label: 'api-gateway', initials: 'AG', color: '#fb923c' } });
+  assert.ok(/api-gateway/.test(byId('project').innerHTML),
+    'the mark must survive the unconfigured early return');
+}
+
 // ── The brief editor ─────────────────────────────────────────────────────────
 // Every id the script reaches for must exist in the markup. The script is
 // string-built and the elements are hand-written, so a rename in one and not

@@ -14,6 +14,8 @@ A [workspacer](https://github.com/DJTouchette/workspacer) plugin. Runs a JQL sea
 
 ## Projects — tying a directory to a prefix
 
+**Where mappings live.** Set a directory's Jira project in **Settings → Projects**, beside that project's name and icon — it's a `"scope": "project"` plugin setting, so the host stores it and one page answers everything about a project instead of one page per plugin. Mappings made in this pane before that existed still work and are labelled `local`; host-held ones are labelled `shared`, and the shared one wins when a directory has both.
+
 The folder icon in the header maps a directory to a Jira project prefix: `/home/you/hvms` → `HVMS`. Two things follow:
 
 - **A pane in that directory shows only that project.** An *unmapped* directory keeps showing everything — hiding your queue because you never filled in a table would be the worse default.
@@ -64,6 +66,7 @@ A few deliberate choices:
 - **The meta line only says what the heading didn't.** A "To Do" pill under a TO DO heading is noise, so it's suppressed; "In Review" under IN PROGRESS survives, because that's the informative half. Priority is the coloured dot (with a tooltip for the exact value) and is spelled out only for High/Highest, where it changes what you'd pick up next.
 - **Done tickets recede** rather than competing with live work, and the header count is open tickets only.
 - **Start agent reserves its space but only fades in on hover**, so revealing it can never reflow the list under your pointer. In a narrow split pane it drops its label and keeps its glyph — a hidden button's width is otherwise paid for by the summary you're actually reading.
+- **The header says which project you're in.** A pane opened beside an agent draws that project's mark and label exactly as workspacer draws them elsewhere — the configured emoji or favicon, or initials on a colour derived from the directory's path. The sidecar resolves it from `config.projects` (one `config.get`, cached) and hands it to the pane on `/state`; resolution mirrors the host's `projectIdentity.ts`, palette and hash included. A *downloaded* icon falls back to the emoji or the initials, because the `workspacer-icon://` scheme that serves it is not registered in the session a plugin webview runs in.
 - **Every state is designed**, not an afterthought: first-run setup with the three fields numbered, a skeleton on first paint (never again — a poll can't blank a list you're reading), an empty queue, a 401 translated into "Jira rejected the credentials", and a transient 500 that keeps the last good list on screen. A failed fetch never claims your queue is empty, because it didn't read it.
 
 ## Notes

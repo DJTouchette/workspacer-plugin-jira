@@ -2,7 +2,7 @@
   "id": "djtouchette.jira",
   "name": "Jira",
   "apiVersion": "1",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "server": {
     "command": "node",
     "args": [
@@ -89,12 +89,29 @@
       "type": "boolean",
       "default": true,
       "help": "OS notification when an issue enters your search that wasn't there before."
+    },
+    {
+      "key": "prefix",
+      "label": "Jira project",
+      "type": "string",
+      "default": "",
+      "scope": "project",
+      "help": "This directory's Jira project key, e.g. HVMS. Set per project in Settings \u2192 Projects."
+    },
+    {
+      "key": "jql",
+      "label": "Extra JQL",
+      "type": "string",
+      "default": "",
+      "scope": "project",
+      "help": "Optional. ANDed with the base JQL for this project \u2014 for a monorepo holding two projects, or one split by component."
     }
   ],
   "capabilities": [
     "agents.spawn",
     "agents.sendMessage",
-    "notifications.post"
+    "notifications.post",
+    "config.get"
   ],
   "consumes": []
 }

@@ -298,6 +298,158 @@ function issuesForCwd(issues, cwd, projects) {
   return all.filter((i) => prefixes.has(prefixOf(i.key)));
 }
 
+// ── Host project identity ────────────────────────────────────────────────────
+// A MIRROR of workspacer's own resolution:
+//   apps/desktop/src/renderer/src/lib/projectIdentity.ts
+//   apps/desktop/src/renderer/src/lib/projectKey.ts
+// The palette, the FNV-1a hash and the initials rules are ported exactly and
+// MUST stay in agreement with that file. A pane that invents its own colour or
+// its own initials for a directory is worse than one that shows no mark at all:
+// the same project would carry two different identities inside one window, and
+// the disagreement would look deliberate. If the host changes its palette or its
+// hash, this changes with it.
+//
+// Nothing here is Jira-specific — the point is that a plugin pane draws a
+// project the way the app draws it.
+
+/** The host's fixed palette. Hues are spread and mid-saturation so a derived
+ *  tint never reads as a status colour. */
+const PROJECT_PALETTE = [
+  '#6b8afd', // indigo
+  '#c084fc', // violet
+  '#f472b6', // pink
+  '#fb923c', // orange
+  '#2dd4bf', // teal
+  '#38bdf8', // sky
+  '#a3a3f5', // periwinkle
+  '#e879a6', // rose
+];
+
+/** A stable 32-bit hash of a string (FNV-1a) — same path, same colour, on every
+ *  machine and across restarts. */
+function fnv1a(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** The last path segment — the name a human calls the project. */
+function basenameOf(dir) {
+  const parts = String(dir || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || '';
+}
+
+/**
+ * One or two characters for a name. A hyphenated or underscored name gives up
+ * its word initials (`work-spacer` → `WS`), which keeps sibling repos that share
+ * a prefix distinct (`api-gateway` and `api-worker` are `AG` and `AW`).
+ */
+function initialsOf(name) {
+  const words = String(name || '').split(/[\s._-]+/).filter(Boolean);
+  if (!words.length) return '?';
+  if (words.length === 1) {
+    const w = words[0];
+    // A camelCase single word still has a second word inside it.
+    const camel = w.match(/^([a-z]+)([A-Z][a-z]*)/);
+    if (camel) return (camel[1][0] + camel[2][0]).toUpperCase();
+    return w.slice(0, 2).toUpperCase();
+  }
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+/** The host's config key for a directory: separators normalized, trailing ones
+ *  dropped. Normalization, not canonicalization — no symlink or `..` resolution. */
+function projectKey(cwd) {
+  return String(cwd || '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/** The key to read for `cwd`, honouring an existing entry that differs only by
+ *  case — but only where the filesystem is case-insensitive, or `~/Repo` and
+ *  `~/repo` would be merged on Linux. The host infers this from
+ *  navigator.platform; a sidecar has the real thing. */
+function resolveProjectKey(map, cwd) {
+  const key = projectKey(cwd);
+  if (!map || Object.prototype.hasOwnProperty.call(map, key)) return key;
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return key;
+  const lowered = key.toLowerCase();
+  for (const existing of Object.keys(map)) {
+    if (existing.toLowerCase() === lowered) return existing;
+  }
+  return key;
+}
+
+/**
+ * Resolve a directory to what the pane should draw for it, from the host's
+ * `config.projects`. A missing entry is normal and fully supported — an
+ * unconfigured project still gets stable initials and a stable colour.
+ *
+ * One deliberate divergence from projectIdentity.ts: a DOWNLOADED icon is not
+ * offered. The host serves those as `workspacer-icon://<file>`, a scheme
+ * registered on Electron's default session, while a plugin pane's <webview>
+ * lives in the `persist:browser` partition — so that URL cannot resolve here and
+ * would draw a broken image. An http(s) favicon is an ordinary subresource and
+ * does load, so it is the one image source passed through; anything else falls
+ * back to the emoji, then to the initials, which is the whole reason the derived
+ * mark exists.
+ */
+function resolveProjectIdentity(dir, projects) {
+  if (!dir) return null;
+  const map = projects && typeof projects === 'object' ? projects : {};
+  const key = resolveProjectKey(map, dir);
+  const raw = map[key];
+  const entry = raw && typeof raw === 'object' ? raw : {};
+  const label = String(entry.label || '').trim() || basenameOf(dir);
+  const favicon = String(entry.favicon || '').trim();
+  const out = {
+    label,
+    // Initials follow the LABEL, so renaming a project renames its mark too.
+    initials: initialsOf(label),
+    // Derived from the KEY, not the label: renaming must not re-colour.
+    color: String(entry.color || '').trim() || PROJECT_PALETTE[fnv1a(key) % PROJECT_PALETTE.length],
+  };
+  const icon = String(entry.icon || '').trim();
+  if (icon) out.icon = icon;
+  if (/^https?:\/\//i.test(favicon)) out.iconSrc = favicon;
+  return out;
+}
+
+/**
+ * The directory ↔ project mapping as the HOST now holds it: a `prefix` (and
+ * optional `jql`) declared `"scope": "project"` in the manifest and stored by
+ * workspacer under `projects[<dir>].plugins[<pluginId>]`.
+ *
+ * This plugin invented that mapping privately, in its own `.projects.json`, and
+ * so did shiplight and ci-watcher — each with its own storage and its own
+ * editor. The host grew the concept, so the private file becomes a fallback:
+ * an existing install keeps working, and the shared page is where new mappings
+ * are made. Host wins on conflict, since that is the one a user can see.
+ */
+function projectsFromHostConfig(hostProjects, pluginId) {
+  const out = [];
+  for (const [dir, entry] of Object.entries(hostProjects || {})) {
+    const mine = ((entry && entry.plugins) || {})[pluginId] || {};
+    const prefix = String(mine.prefix || '').trim();
+    if (!prefix) continue;
+    out.push({ dir, prefix, jql: String(mine.jql || '').trim() });
+  }
+  return normalizeProjects(out);
+}
+
+/**
+ * Host mappings layered over the legacy file. A directory present in both takes
+ * the host's, so editing it on the Projects page actually changes behaviour
+ * rather than being silently shadowed by a file nobody remembers.
+ */
+function mergeProjectSources(hostList, legacyList) {
+  const byDir = new Map();
+  for (const e of normalizeProjects(legacyList)) byDir.set(e.dir, e);
+  for (const e of normalizeProjects(hostList)) byDir.set(e.dir, e);
+  return [...byDir.values()];
+}
+
 /** Settings → the resolved config, with a code default behind every key. */
 function resolveConf(s) {
   const st = s || {};
@@ -328,10 +480,13 @@ function newlyArrived(prev, issues) {
 }
 
 module.exports = {
+  projectsFromHostConfig, mergeProjectSources,
   adfToText, normalize, briefFor, renderBrief, resolveConf, isConfigured,
   newlyArrived, DEFAULT_JQL, DEFAULT_BRIEF, BRIEF_TOKENS,
   wantsComments, formatComments, DEFAULT_BRIEFS, normalizeBriefs, slugId,
   prefixOf, normalizeProjects, dirsForIssue, issuesForCwd,
+  basenameOf, initialsOf, projectKey, resolveProjectKey, resolveProjectIdentity,
+  PROJECT_PALETTE,
 };
 if (require.main !== module) return;
 
@@ -363,6 +518,56 @@ let settings = Object.assign({}, wks.settings, envSettings);
 if (wks.onSettings) wks.onSettings((s) => { settings = Object.assign({}, settings, s); });
 
 const conf = () => resolveConf(settings);
+
+// ── The host's project identities ────────────────────────────────────────────
+// `config.get` hands back the whole config document; only `projects` is kept.
+//
+// Fetched HERE, in the sidecar, rather than in the webview: the pane already
+// polls /state, and a widget board can hold several surfaces reading the same
+// endpoint, so one bus call serves all of them instead of one per surface —
+// and the pane keeps its single source of truth. It also means the pane still
+// draws a mark when it is opened without a bus token (standalone
+// `workspacer plugin dev`), where `window.workspacer` does not exist.
+//
+// Refreshed on a TTL because the config has no change event on the bus; the
+// host's own config.get is mtime-gated, so a poll costs a stat in the steady
+// state.
+const PROJECTS_TTL_MS = 60_000;
+let hostProjects = {};
+let hostProjectsAt = 0;
+let hostProjectsInFlight = false;
+let hostProjectsWarned = false;
+
+function refreshHostProjects() {
+  if (hostProjectsInFlight) return;
+  hostProjectsInFlight = true;
+  wks.call('config.get', {})
+    .then((cfg) => {
+      const p = cfg && cfg.projects;
+      hostProjects = p && typeof p === 'object' ? p : {};
+      hostProjectsAt = Date.now();
+      hostProjectsWarned = false;
+    })
+    .catch((e) => {
+      // Once, not every minute: a missing capability grant would otherwise
+      // fill the sidecar log for the life of the process.
+      if (!hostProjectsWarned) {
+        hostProjectsWarned = true;
+        log('config.get failed, panes will show no project mark: ' + e.message);
+      }
+      // Back off like a success so a dead bus is polled at the same cadence.
+      hostProjectsAt = Date.now();
+    })
+    .finally(() => { hostProjectsInFlight = false; });
+}
+
+/** The identities, never awaited by a request: a bus call that never answers
+ *  must not hang /state. A cold cache costs one poll tick of a missing mark. */
+function projectsNow() {
+  if (Date.now() - hostProjectsAt > PROJECTS_TTL_MS) refreshHostProjects();
+  return hostProjects;
+}
+wks.ready.then(refreshHostProjects).catch(() => {});
 
 // ── Jira REST ────────────────────────────────────────────────────────────────
 
@@ -516,7 +721,17 @@ function resetBriefs() {
 }
 
 function loadProjects() {
-  return normalizeProjects(readJsonFile(PROJECTS_FILE) || []);
+  return mergeProjectSources(
+    projectsFromHostConfig(hostProjects, manifest.id),
+    readJsonFile(PROJECTS_FILE) || [],
+  );
+}
+
+/** Where each active mapping came from, so the pane can say so instead of
+ *  presenting two sources as one. */
+function projectSources() {
+  const host = new Set(projectsFromHostConfig(hostProjects, manifest.id).map((e) => e.dir));
+  return loadProjects().map((e) => ({ ...e, source: host.has(e.dir) ? 'host' : 'legacy' }));
 }
 
 function saveProjects(list) {
@@ -657,6 +872,10 @@ const server = http.createServer(async (req, res) => {
       // even when the pane itself has no cwd.
       scopedTo: projects.filter((e) => e.dir === cwd.replace(/\/+$/, '')).map((e) => e.prefix),
       mapped: projects.length > 0,
+      // What the HOST would draw for this pane's directory, so the header reads
+      // as part of the app rather than as a plugin that happens to be docked in
+      // it. null when the pane has no cwd (the Overview pane).
+      project: resolveProjectIdentity(cwd, projectsNow()),
     }));
   }
   if (url === '/refresh' && req.method === 'POST') {
@@ -712,7 +931,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (url === '/projects' && req.method === 'GET') {
-    return sendJson(res, 200, { projects: loadProjects() });
+    return sendJson(res, 200, { projects: projectSources(), pluginId: manifest.id });
   }
   if (url === '/projects' && req.method === 'POST') {
     const body = await readBody(req);
