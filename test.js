@@ -3,7 +3,8 @@
 // server.js exports these and only starts the sidecar when run directly.
 const assert = require('assert');
 const {
-  adfToText, normalize, briefFor, resolveConf, isConfigured, newlyArrived, DEFAULT_JQL,
+  adfToText, normalize, briefFor, renderBrief, resolveConf, isConfigured, newlyArrived,
+  DEFAULT_JQL, DEFAULT_BRIEF, BRIEF_TOKENS,
 } = require('./server.js');
 
 // ── adfToText ────────────────────────────────────────────────────────────────
@@ -92,6 +93,38 @@ assert.ok(brief.includes('https://acme.atlassian.net/browse/PROJ-12'), 'the brie
 assert.ok(brief.includes('It flakes.'), 'the brief carries the description');
 assert.ok(/before writing code/i.test(brief), 'the brief asks for a read-back first');
 assert.ok(briefFor(bare).includes('no description'), 'an empty description says so explicitly');
+
+// ── renderBrief (the editable template) ──────────────────────────────────────
+assert.strictEqual(renderBrief('{{key}}: {{summary}}', n), 'PROJ-12: Fix the flaky login test');
+// Whitespace inside the braces is a typo waiting to happen; accept it.
+assert.strictEqual(renderBrief('{{ key }}', n), 'PROJ-12');
+// Case-insensitive, so {{KEY}} does not silently do nothing.
+assert.strictEqual(renderBrief('{{KEY}}', n), 'PROJ-12');
+// An UNKNOWN token survives verbatim. Blanking it would delete the line the
+// user cared about and hide the typo; leaving it makes the mistake visible in
+// the preview, which is the whole point of having one.
+assert.strictEqual(renderBrief('a {{summry}} b', n), 'a {{summry}} b');
+// Every advertised token resolves — a chip in the editor that inserts a token
+// the renderer ignores is a broken promise.
+for (const t of BRIEF_TOKENS) {
+  const out = renderBrief('<{{' + t.token + '}}>', n);
+  assert.ok(!out.includes('{{'), 'advertised token {{' + t.token + '}} does not resolve');
+}
+// Absent values get a stand-in, never a blank: a prompt with nothing after
+// "Priority:" reads as a bug to the model too.
+assert.strictEqual(renderBrief('{{priority}}', { key: 'X' }), 'unset');
+assert.strictEqual(renderBrief('{{summary}}', { key: 'X' }), '(no summary)');
+assert.ok(/no description/.test(renderBrief('{{description}}', { key: 'X' })));
+// Degenerate templates must not throw — the editor lets you save anything.
+assert.strictEqual(renderBrief('', n), '');
+assert.strictEqual(renderBrief(null, n), '');
+assert.strictEqual(renderBrief('no tokens at all', n), 'no tokens at all');
+assert.doesNotThrow(() => renderBrief('{{key}}', null));
+
+// The default is a template, and briefFor is that template rendered — so the
+// shipped wording and the editable one can never drift apart.
+assert.ok(DEFAULT_BRIEF.includes('{{key}}'), 'the default must be a template');
+assert.strictEqual(briefFor(n), renderBrief(DEFAULT_BRIEF, n));
 
 // ── resolveConf / isConfigured ───────────────────────────────────────────────
 const d = resolveConf({});

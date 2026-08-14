@@ -5,3 +5,4 @@
 .install-source
 .disabled
 node_modules/
+.brief-template

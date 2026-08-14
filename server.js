@@ -65,30 +65,80 @@ function normalize(issue, baseUrl) {
 }
 
 /**
- * The prompt a spawned agent starts from. Deliberately states the ticket's
- * identity and asks for a read-back BEFORE code: the agent has the repo, the
- * human has the context, and a ticket summary is not a spec. Handing an agent
+ * The prompt a spawned agent starts from, as a template.
+ *
+ * It deliberately does not say "implement this": it states the ticket and asks
+ * for a read-back BEFORE code, because the agent has the repo, the human has
+ * the context, and a ticket summary is not a spec. Handing an agent
  * "implement PROJ-123" and walking away is how you get confident nonsense.
+ *
+ * This is only the DEFAULT — teams whose tickets are more precise than that
+ * (or who want a house style, a definition of done, a "always run the linter")
+ * edit it in the pane, and the edit is stored per install. See loadTemplate.
  */
-function briefFor(issue) {
-  const lines = [
-    'You are picking up ' + issue.key + ' from Jira.',
-    '',
-    'Title:    ' + issue.summary,
-    'Type:     ' + (issue.type || 'unknown'),
-    'Status:   ' + (issue.status || 'unknown'),
-    'Priority: ' + (issue.priority || 'unset'),
-    'Link:     ' + issue.url,
-  ];
-  if (issue.description) lines.push('', 'Ticket description:', '', issue.description);
-  else lines.push('', '(The ticket has no description.)');
-  lines.push(
-    '',
-    'Start by orienting yourself in this repo and telling me how you read the',
-    'ticket — what you think needs to change and where — before writing code.',
-    'If the ticket is ambiguous or underspecified, say so and ask.',
+const DEFAULT_BRIEF = [
+  'You are picking up {{key}} from Jira.',
+  '',
+  'Title:    {{summary}}',
+  'Type:     {{type}}',
+  'Status:   {{status}}',
+  'Priority: {{priority}}',
+  'Link:     {{url}}',
+  '',
+  'Ticket description:',
+  '',
+  '{{description}}',
+  '',
+  'Start by orienting yourself in this repo and telling me how you read the',
+  'ticket — what you think needs to change and where — before writing code.',
+  'If the ticket is ambiguous or underspecified, say so and ask.',
+].join('\n');
+
+/** The substitutions a template may use, in the order the editor lists them. */
+const BRIEF_TOKENS = [
+  { token: 'key', help: 'PROJ-123' },
+  { token: 'summary', help: 'the ticket title' },
+  { token: 'description', help: 'body text, flattened from ADF' },
+  { token: 'type', help: 'Bug / Story / Task…' },
+  { token: 'status', help: 'In Review, To Do…' },
+  { token: 'priority', help: 'Highest, High…' },
+  { token: 'assignee', help: 'display name' },
+  { token: 'url', help: 'link back to Jira' },
+];
+
+/**
+ * Fill a template from one issue.
+ *
+ * An UNKNOWN token is left standing rather than blanked: `{{summry}}` should
+ * show up in the preview as itself so the typo is visible, instead of silently
+ * deleting the line the user cared about. Absent values get an explicit stand-in
+ * ("unset", "(The ticket has no description.)") for the same reason — a prompt
+ * with a blank where the priority goes reads as a bug to the model too.
+ */
+function renderBrief(template, issue) {
+  const i = issue || {};
+  const vals = {
+    key: i.key || '',
+    summary: i.summary || '(no summary)',
+    description: i.description || '(The ticket has no description.)',
+    type: i.type || 'unknown',
+    status: i.status || 'unknown',
+    priority: i.priority || 'unset',
+    assignee: i.assignee || 'unassigned',
+    url: i.url || '',
+  };
+  return String(template == null ? '' : template).replace(
+    /\{\{\s*(\w+)\s*\}\}/g,
+    (whole, name) => {
+      const k = String(name).toLowerCase();
+      return Object.prototype.hasOwnProperty.call(vals, k) ? vals[k] : whole;
+    },
   );
-  return lines.join('\n');
+}
+
+/** The brief for an issue using the DEFAULT template. */
+function briefFor(issue) {
+  return renderBrief(DEFAULT_BRIEF, issue);
 }
 
 /** Settings → the resolved config, with a code default behind every key. */
@@ -120,7 +170,10 @@ function newlyArrived(prev, issues) {
   return issues.filter((i) => !prev.has(i.key));
 }
 
-module.exports = { adfToText, normalize, briefFor, resolveConf, isConfigured, newlyArrived, DEFAULT_JQL };
+module.exports = {
+  adfToText, normalize, briefFor, renderBrief, resolveConf, isConfigured,
+  newlyArrived, DEFAULT_JQL, DEFAULT_BRIEF, BRIEF_TOKENS,
+};
 if (require.main !== module) return;
 
 // ── Runtime ──────────────────────────────────────────────────────────────────
@@ -233,6 +286,48 @@ async function pollNow() {
   }
 }
 
+// ── The brief template ───────────────────────────────────────────────────────
+// Stored per install, in the plugin's own directory — which is the one place a
+// sandboxed sidecar may write (bwrap/sandbox-exec bind exactly this dir). It is
+// deliberately NOT a plugin setting: settings render as a 160px single-line
+// input, which is no place to compose a prompt, and a plugin cannot write its
+// own settings anyway (/plugins/settings is guarded to the host token).
+//
+// Dot-prefixed and gitignored, like the other per-install state the host keeps
+// here (.settings.json, .bus-token), so a reinstall of the package doesn't
+// carry someone's edited prompt into the repo.
+const TEMPLATE_FILE = path.join(DIR, '.brief-template');
+
+// A prompt, not a payload: enough for a long house style, small enough that a
+// mistake can't fill the disk or the model's context.
+const MAX_TEMPLATE_CHARS = 20000;
+
+/** The active template — the stored one, or the default when none is stored. */
+function loadTemplate() {
+  try {
+    const raw = fs.readFileSync(TEMPLATE_FILE, 'utf8');
+    return raw.trim() ? raw : DEFAULT_BRIEF;
+  } catch {
+    return DEFAULT_BRIEF;
+  }
+}
+
+/**
+ * Persist a template, or clear it to fall back to the default. Storing a copy
+ * of the default is treated as a reset: otherwise a user who edits and undoes
+ * is pinned to today's wording forever, and never picks up an improved default
+ * from a plugin update.
+ */
+function saveTemplate(template) {
+  const t = String(template == null ? '' : template).slice(0, MAX_TEMPLATE_CHARS);
+  if (!t.trim() || t.trim() === DEFAULT_BRIEF.trim()) {
+    try { fs.unlinkSync(TEMPLATE_FILE); } catch {}
+    return { isDefault: true, template: DEFAULT_BRIEF };
+  }
+  fs.writeFileSync(TEMPLATE_FILE, t, 'utf8');
+  return { isDefault: false, template: t };
+}
+
 // ── Ticket → agent ───────────────────────────────────────────────────────────
 
 /** Spawn an agent in `cwd` and hand it the brief. Returns the session id. */
@@ -245,7 +340,7 @@ async function startAgent(issue, cwd) {
   // A fresh session needs a moment before it accepts input, and
   // agents.sendMessage throws while it doesn't — retry briefly rather than
   // dropping the brief and leaving the user an empty agent they didn't ask for.
-  const text = briefFor(issue);
+  const text = renderBrief(loadTemplate(), issue);
   let lastErr = null;
   for (let attempt = 0; attempt < 15; attempt++) {
     try {
@@ -327,6 +422,40 @@ const server = http.createServer(async (req, res) => {
       log('start failed: ' + e.message);
       return sendJson(res, 500, { error: e.message });
     }
+  }
+  if (url === '/brief' && req.method === 'GET') {
+    const template = loadTemplate();
+    return sendJson(res, 200, {
+      template,
+      isDefault: template === DEFAULT_BRIEF,
+      default: DEFAULT_BRIEF,
+      tokens: BRIEF_TOKENS,
+    });
+  }
+  if (url === '/brief' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, saveTemplate(body.reset ? '' : body.template));
+    } catch (e) {
+      // A read-only plugin dir is the realistic failure. Say so — silently
+      // discarding an edit the user just wrote is the worse outcome.
+      log('could not save the brief template: ' + e.message);
+      return sendJson(res, 500, { error: 'could not save: ' + e.message });
+    }
+  }
+  // Rendered by the SERVER so the preview is the exact text the agent will be
+  // sent, rather than a second substitution implementation in the pane that can
+  // drift from this one.
+  if (url === '/brief/preview' && req.method === 'POST') {
+    const body = await readBody(req);
+    const issue = state.issues.find((i) => i.key === body.key) || state.issues[0] || {
+      key: 'PROJ-123',
+      summary: 'An example ticket',
+      description: 'What the ticket says goes here.',
+      type: 'Task', status: 'To Do', priority: 'Medium', assignee: 'you',
+      url: 'https://example.atlassian.net/browse/PROJ-123',
+    };
+    return sendJson(res, 200, { text: renderBrief(body.template, issue), key: issue.key });
   }
   // One widget file, branching on the last path segment — matched before the
   // catch-all, which would otherwise hand a small tile the whole pane UI.

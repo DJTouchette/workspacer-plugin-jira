@@ -13,7 +13,17 @@ A [workspacer](https://github.com/DJTouchette/workspacer) plugin. Runs a JQL sea
 
 ## The brief
 
-The brief deliberately does **not** say "implement this". It states the ticket and then asks the agent to read the repo and tell you how it understands the work *before* writing code, and to say so if the ticket is underspecified. A ticket summary is not a spec, and an agent handed one as though it were will confidently build the wrong thing. Edit `briefFor` in `server.js` if your team's tickets are more precise than mine.
+The brief deliberately does **not** say "implement this". It states the ticket and then asks the agent to read the repo and tell you how it understands the work *before* writing code, and to say so if the ticket is underspecified. A ticket summary is not a spec, and an agent handed one as though it were will confidently build the wrong thing.
+
+That's only the **default**. Hit the pencil in the pane header to edit it — a house style, a definition of done, "always run the linter", or a different shape entirely. The editor has:
+
+- **Token chips** you click to insert: `{{key}}` `{{summary}}` `{{description}}` `{{type}}` `{{status}}` `{{priority}}` `{{assignee}}` `{{url}}`. Case-insensitive, and `{{ key }}` with spaces works too.
+- **A live preview**, rendered *by the sidecar* against a real ticket from your queue — so what you're reading is exactly the text the agent will be sent, not a second substitution implementation that can drift from the real one.
+- **Reset to default**, which also happens if you save something identical to the default. That means an edit-then-undo isn't pinned to today's wording forever, and you still pick up an improved default from a plugin update.
+
+An unknown token like `{{summry}}` is left standing rather than blanked, so a typo shows up in the preview instead of silently deleting the line you cared about.
+
+Your edit is stored per install (`.brief-template` beside the plugin, the one place a sandboxed sidecar may write) and is not committed — it's yours, not the package's.
 
 ## Setup
 

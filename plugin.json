@@ -2,10 +2,12 @@
   "id": "djtouchette.jira",
   "name": "Jira",
   "apiVersion": "1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "server": {
     "command": "node",
-    "args": ["server.js"],
+    "args": [
+      "server.js"
+    ],
     "port": 9214,
     "health": "/health"
   },
@@ -13,7 +15,7 @@
     {
       "type": "djtouchette.jira",
       "title": "Jira",
-      "icon": "🎫",
+      "icon": "\ud83c\udfab",
       "scope": "both",
       "path": "/"
     }
@@ -22,8 +24,12 @@
     {
       "id": "queue",
       "title": "My tickets",
-      "icon": "🎫",
-      "sizes": ["small", "medium", "large"],
+      "icon": "\ud83c\udfab",
+      "sizes": [
+        "small",
+        "medium",
+        "large"
+      ],
       "path": "/widget/queue"
     }
   ],
@@ -33,7 +39,7 @@
       "label": "Jira base URL",
       "type": "string",
       "default": "",
-      "help": "e.g. https://your-org.atlassian.net — no trailing slash."
+      "help": "e.g. https://your-org.atlassian.net \u2014 no trailing slash."
     },
     {
       "key": "email",
@@ -47,7 +53,7 @@
       "label": "Jira API token",
       "type": "string",
       "default": "",
-      "help": "Create at id.atlassian.com → Security → API tokens.",
+      "help": "Create at id.atlassian.com \u2192 Security \u2192 API tokens.",
       "secret": true
     },
     {
@@ -62,7 +68,12 @@
       "label": "Agent to spawn",
       "type": "select",
       "default": "claude",
-      "options": ["claude", "codex", "opencode", "pi"],
+      "options": [
+        "claude",
+        "codex",
+        "opencode",
+        "pi"
+      ],
       "help": "Which harness 'Start agent' launches."
     },
     {
@@ -80,6 +91,10 @@
       "help": "OS notification when an issue enters your search that wasn't there before."
     }
   ],
-  "capabilities": ["agents.spawn", "agents.sendMessage", "notifications.post"],
+  "capabilities": [
+    "agents.spawn",
+    "agents.sendMessage",
+    "notifications.post"
+  ],
   "consumes": []
 }

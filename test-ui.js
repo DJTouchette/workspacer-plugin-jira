@@ -58,12 +58,16 @@ function mount(file, { cwd = '/home/u/proj', width = 460 } = {}) {
     innerHTML: '', textContent: '', style: {}, dataset: {}, className: '',
     addEventListener() {}, querySelector: () => null, closest: () => null,
   });
-  for (const id of ['main', 'toast', 'tally', 'freshness', 'refresh', 'wrap']) {
-    nodes.set(id, mkNode());
-  }
+  // Lazy: any id the UI asks for gets a node. A fixed list means every new
+  // element in the pane breaks the harness with a null deref instead of testing
+  // what changed.
+  const byId = (id) => {
+    if (!nodes.has(id)) nodes.set(id, mkNode());
+    return nodes.get(id);
+  };
 
   const document = {
-    getElementById: (id) => nodes.get(id) ?? null,
+    getElementById: byId,
     querySelector: () => null,
     addEventListener() {},
   };
@@ -81,14 +85,14 @@ function mount(file, { cwd = '/home/u/proj', width = 460 } = {}) {
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(script, sandbox);
-  return { sandbox, nodes };
+  return { sandbox, nodes, byId };
 }
 
 // ── Pane ─────────────────────────────────────────────────────────────────────
 for (const [name, state] of Object.entries(SCENES)) {
-  const { sandbox, nodes } = mount('index.html');
+  const { sandbox, byId } = mount('index.html');
   assert.doesNotThrow(() => sandbox.render(state), name + ': render threw');
-  const html = nodes.get('main').innerHTML;
+  const html = byId('main').innerHTML;
 
   assert.ok(html.length > 50, name + ': rendered almost nothing');
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html), name + ': leaked a placeholder value');
@@ -112,7 +116,7 @@ for (const [name, state] of Object.entries(SCENES)) {
     // Priority text only where it changes what you would pick up.
     assert.ok(/prio-text[^"]*">Highest</.test(html), 'full: Highest must be spelled out');
     assert.ok(!/prio-text[^"]*">Medium</.test(html), 'full: Medium is the dot\'s job, not text');
-    assert.ok(html.includes('5 open') || nodes.get('tally').textContent === '4 open',
+    assert.ok(html.includes('5 open') || byId('tally').textContent === '4 open',
       'full: the tally counts open work');
   }
   if (name === 'authError') {
@@ -134,43 +138,71 @@ for (const [name, state] of Object.entries(SCENES)) {
 
 // The tally counts OPEN work: a queue that is mostly shipped is not a busy queue.
 {
-  const { sandbox, nodes } = mount('index.html');
+  const { sandbox, byId } = mount('index.html');
   sandbox.render(SCENES.full);
-  assert.strictEqual(nodes.get('tally').textContent, '4 open',
+  assert.strictEqual(byId('tally').textContent, '4 open',
     'the header must count open tickets, not every row');
 }
 
 // Without a project the action is disabled and SAYS why, once, rather than
 // silently doing nothing per row.
 {
-  const { sandbox, nodes } = mount('index.html', { cwd: '' });
+  const { sandbox, byId } = mount('index.html', { cwd: '' });
   sandbox.render(SCENES.full);
-  const html = nodes.get('main').innerHTML;
+  const html = byId('main').innerHTML;
   assert.ok(/no project/i.test(html), 'no-cwd must explain why Start agent is unavailable');
   assert.ok(/<button class="start"[^>]*disabled/.test(html), 'no-cwd must disable the action');
 }
 
+// ── The brief editor ─────────────────────────────────────────────────────────
+// Every id the script reaches for must exist in the markup. The script is
+// string-built and the elements are hand-written, so a rename in one and not
+// the other is a runtime null deref on click — invisible until someone opens
+// the editor. (This is how the sheet first shipped broken in dev: the test
+// harness stubbed a fixed id list, so a missing element looked like a passing
+// test.)
+{
+  const html = fs.readFileSync(path.join(__dirname, 'ui', 'index.html'), 'utf8');
+  const declared = new Set([...html.matchAll(/\bid="([\w-]+)"/g)].map((m) => m[1]));
+  const referenced = new Set([...html.matchAll(/\$\('([\w-]+)'\)/g)].map((m) => m[1]));
+  for (const id of referenced) {
+    assert.ok(declared.has(id), 'the script reads #' + id + ' but no element declares it');
+  }
+  // The editor's own moving parts, named so a silent deletion is a test failure
+  // rather than a button that stops doing anything.
+  for (const id of ['sheet', 'tpl', 'chips', 'preview', 'saveBrief', 'resetBrief',
+                    'cancelBrief', 'editBrief', 'sheetClose']) {
+    assert.ok(declared.has(id), 'the brief editor is missing #' + id);
+  }
+  // The token chips are built from what the SERVER advertises, so the two can
+  // never drift — pin that they are not hardcoded in the pane.
+  assert.ok(/b\.tokens/.test(html), 'chips must come from the server token list, not a local copy');
+  // The preview is server-rendered for the same reason.
+  assert.ok(/\/brief\/preview/.test(html), 'the preview must be rendered by the sidecar');
+  assert.ok(!/\{\{\s*\\w\+/.test(html), 'the pane must not implement its own substitution');
+}
+
 // ── Widget ───────────────────────────────────────────────────────────────────
 for (const [name, state] of Object.entries(SCENES)) {
-  const { sandbox, nodes } = mount('widget.html');
+  const { sandbox, byId } = mount('widget.html');
   assert.doesNotThrow(() => sandbox.render(state), 'widget ' + name + ': render threw');
-  const html = nodes.get('wrap').innerHTML;
+  const html = byId('wrap').innerHTML;
   assert.ok(html.length > 10, 'widget ' + name + ': rendered almost nothing');
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html), 'widget ' + name + ': leaked a placeholder');
 }
 {
-  const { sandbox, nodes } = mount('widget.html');
+  const { sandbox, byId } = mount('widget.html');
   sandbox.render(SCENES.full);
-  const html = nodes.get('wrap').innerHTML;
+  const html = byId('wrap').innerHTML;
   // Done work is not queue: the tile's headline number is what is still open.
   assert.ok(/>4</.test(html), 'the widget count must exclude done tickets');
   assert.ok(/2<\/b> in progress/.test(html), 'the widget should say how many are moving');
   assert.ok(!/PLAT-12/.test(html), 'a done ticket does not belong on the queue tile');
 }
 {
-  const { sandbox, nodes } = mount('widget.html');
+  const { sandbox, byId } = mount('widget.html');
   sandbox.render(SCENES.empty);
-  assert.ok(/Queue clear/.test(nodes.get('wrap').innerHTML), 'an empty queue reads as clear, not blank');
+  assert.ok(/Queue clear/.test(byId('wrap').innerHTML), 'an empty queue reads as clear, not blank');
 }
 
 console.log('ok — pane + widget render cleanly across ' + Object.keys(SCENES).length + ' states');
