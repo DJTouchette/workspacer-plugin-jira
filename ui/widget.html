@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>My tickets</title>
+<style>
+  /* Same token aliasing as the pane — see ui/index.html for why it is done once
+     here rather than as per-site var() fallbacks. */
+  :root {
+    --bg:       var(--wks-bg-base, rgb(24, 24, 27));
+    --hover:    var(--wks-bg-hover, rgb(38, 38, 44));
+    --line:     var(--wks-border-subtle, rgb(45, 45, 50));
+    --fg:       var(--wks-text-primary, rgb(220, 220, 235));
+    --muted:    var(--wks-text-muted, rgb(140, 140, 155));
+    --faint:    var(--wks-text-faint, rgb(123, 123, 137));
+    --disabled: var(--wks-text-disabled, rgb(90, 90, 100));
+    --warning:  var(--wks-warning, #facc15);
+    --error:    var(--wks-error, rgb(248, 113, 113));
+    --success:  var(--wks-success, rgb(74, 222, 128));
+    --r-pill:   var(--wks-radius-pill, 999px);
+    --sans:     var(--wks-font-sans, system-ui, -apple-system, 'Segoe UI', sans-serif);
+    --mono:     var(--wks-font-mono, ui-monospace, 'JetBrains Mono', monospace);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; overflow: hidden;
+    font-family: var(--sans); font-size: 0.72rem;
+    /* Transparent: a tile is drawn by the board, not by the guest page. */
+    background: transparent; color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+  }
+  svg { flex: none; }
+
+  #wrap { height: 100%; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+  .headline { display: flex; align-items: baseline; gap: 6px; }
+  .count {
+    font-size: 1.7rem; font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+  }
+  .label {
+    font-size: 0.6rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--faint);
+  }
+  /* How many of them are already moving — the second fact worth a glance. */
+  .sub { font-size: 0.66rem; color: var(--muted); }
+  .sub b { color: var(--warning); font-weight: 600; }
+
+  /* A tile is a fixed square and the list is however long the queue is, so it
+     WILL run past the bottom. Fading the last few pixels makes the cut read as
+     "there is more" instead of a row sliced in half. */
+  ul {
+    list-style: none; margin: 0; padding: 0; flex: 1; overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  }
+  li {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 2.5px 0; min-width: 0;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; align-self: center; background: var(--disabled); }
+  .dot.highest { background: var(--error); }
+  .dot.high { background: var(--warning); }
+  .key {
+    font-family: var(--mono); font-size: 0.6rem; font-weight: 600;
+    color: var(--faint); flex: none;
+  }
+  .sum { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .quiet {
+    height: 100%; display: grid; place-items: center; text-align: center;
+    color: var(--faint); font-size: 0.66rem; line-height: 1.5; padding: 4px;
+  }
+  .quiet .clear { color: var(--success); }
+
+  /* Small tiles (1×1) show one fact, not a list — the board draws no title bar
+     over a widget, so the tile has to say what it is by what it draws. */
+  @media (max-width: 190px) {
+    ul, .sub { display: none; }
+    #wrap { justify-content: center; align-items: center; gap: 3px; }
+    .headline { flex-direction: column; align-items: center; gap: 2px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="wrap"><div class="quiet">…</div></div>
+<script>
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+  const wrap = document.getElementById('wrap');
+  let last = null;
+
+  const PRIO = (p) => {
+    const s = String(p || '').toLowerCase();
+    if (s.includes('highest') || s.includes('blocker') || s.includes('critical')) return 'highest';
+    if (s.includes('high') || s.includes('major')) return 'high';
+    return '';
+  };
+
+  function render(s) {
+    last = s;
+    if (!s.configured) {
+      wrap.innerHTML = '<div class="quiet">Connect Jira in<br>Settings → Plugins</div>';
+      return;
+    }
+    const items = (s.issues || []).filter((i) => i.statusCategory !== 'done');
+    if (!items.length) {
+      wrap.innerHTML = '<div class="quiet"><div><div class="clear">Queue clear</div>' +
+        '<div style="margin-top:3px">nothing assigned</div></div></div>';
+      return;
+    }
+    const moving = items.filter((i) => i.statusCategory === 'indeterminate').length;
+    wrap.innerHTML =
+      '<div>' +
+        '<div class="headline"><span class="count">' + items.length + '</span>' +
+        '<span class="label">' + (items.length === 1 ? 'ticket' : 'tickets') + '</span></div>' +
+        (moving ? '<div class="sub"><b>' + moving + '</b> in progress</div>' : '') +
+      '</div>' +
+      '<ul>' + items.slice(0, 6).map((i) =>
+        '<li><span class="dot ' + PRIO(i.priority) + '"></span>' +
+        '<span class="key">' + esc(i.key) + '</span>' +
+        '<span class="sum">' + esc(i.summary) + '</span></li>').join('') +
+      '</ul>';
+  }
+
+  async function load() {
+    try {
+      render(await (await fetch('/state')).json());
+    } catch {
+      // A blip must not blank a tile that already has content.
+      if (!last) wrap.innerHTML = '<div class="quiet">Sidecar unreachable</div>';
+    }
+  }
+  load();
+  // 30s, not the pane's 15s: a glanceable tile has no business being the most
+  // eager thing on the board, and every tile reads the same cached /state.
+  setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+# Written by the host at install/run time, never by hand — see the plugin
+# scaffold rules in the catalog's IMPLEMENTING.md.
+.bus-token
+.settings.json
+.install-source
+.disabled
+node_modules/

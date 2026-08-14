@@ -1,0 +1,85 @@
+{
+  "id": "djtouchette.jira",
+  "name": "Jira",
+  "apiVersion": "1",
+  "version": "1.0.0",
+  "server": {
+    "command": "node",
+    "args": ["server.js"],
+    "port": 9214,
+    "health": "/health"
+  },
+  "panes": [
+    {
+      "type": "djtouchette.jira",
+      "title": "Jira",
+      "icon": "🎫",
+      "scope": "both",
+      "path": "/"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "queue",
+      "title": "My tickets",
+      "icon": "🎫",
+      "sizes": ["small", "medium", "large"],
+      "path": "/widget/queue"
+    }
+  ],
+  "settings": [
+    {
+      "key": "baseUrl",
+      "label": "Jira base URL",
+      "type": "string",
+      "default": "",
+      "help": "e.g. https://your-org.atlassian.net — no trailing slash."
+    },
+    {
+      "key": "email",
+      "label": "Atlassian account email",
+      "type": "string",
+      "default": "",
+      "help": "The account the API token belongs to."
+    },
+    {
+      "key": "apiToken",
+      "label": "Jira API token",
+      "type": "string",
+      "default": "",
+      "help": "Create at id.atlassian.com → Security → API tokens.",
+      "secret": true
+    },
+    {
+      "key": "jql",
+      "label": "JQL",
+      "type": "string",
+      "default": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+      "help": "Which issues to show. Defaults to your open assigned work."
+    },
+    {
+      "key": "provider",
+      "label": "Agent to spawn",
+      "type": "select",
+      "default": "claude",
+      "options": ["claude", "codex", "opencode", "pi"],
+      "help": "Which harness 'Start agent' launches."
+    },
+    {
+      "key": "pollSeconds",
+      "label": "Poll interval (s)",
+      "type": "number",
+      "default": 120,
+      "help": "How often to re-run the JQL search."
+    },
+    {
+      "key": "notifyNew",
+      "label": "Notify on newly assigned tickets",
+      "type": "boolean",
+      "default": true,
+      "help": "OS notification when an issue enters your search that wasn't there before."
+    }
+  ],
+  "capabilities": ["agents.spawn", "agents.sendMessage", "notifications.post"],
+  "consumes": []
+}

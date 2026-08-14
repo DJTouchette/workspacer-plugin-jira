@@ -1,0 +1,587 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jira</title>
+<style>
+  /* ── Tokens ────────────────────────────────────────────────────────────────
+     The host injects the whole --wks-* set into this webview on dom-ready
+     (usePluginWebview → insertCSS) and re-injects on every theme change, so
+     this plugin themes itself for free. Aliased ONCE here rather than writing
+     `var(--wks-x, #hex)` at forty call sites: per-site fallback literals drift
+     from the real theme values, which is exactly what workspacer's
+     DESIGN_LANGUAGE §2 bans. The defaults below are the app's own first-paint
+     dark values (App.css :root), so the pane is legible in the instant before
+     injection and when opened standalone during `workspacer plugin dev`. */
+  :root {
+    --bg:        var(--wks-bg-base, rgb(24, 24, 27));
+    --surface:   var(--wks-bg-surface, rgb(30, 30, 33));
+    --hover:     var(--wks-bg-hover, rgb(38, 38, 44));
+    --line:      var(--wks-border-subtle, rgb(45, 45, 50));
+    --fg:        var(--wks-text-primary, rgb(220, 220, 235));
+    --fg2:       var(--wks-text-secondary, rgb(200, 200, 210));
+    --muted:     var(--wks-text-muted, rgb(140, 140, 155));
+    --faint:     var(--wks-text-faint, rgb(123, 123, 137));
+    --disabled:  var(--wks-text-disabled, rgb(90, 90, 100));
+    --accent:    var(--wks-accent, rgb(80, 120, 200));
+    --accent-fg: var(--wks-accent-text, rgb(96, 165, 250));
+    --success:   var(--wks-success, rgb(74, 222, 128));
+    --error:     var(--wks-error, rgb(248, 113, 113));
+    --warning:   var(--wks-warning, #facc15);
+    --r-sm:      var(--wks-radius-sm, 5px);
+    --r-md:      var(--wks-radius-md, 8px);
+    --r-lg:      var(--wks-radius-lg, 12px);
+    --r-pill:    var(--wks-radius-pill, 999px);
+    --sans:      var(--wks-font-sans, system-ui, -apple-system, 'Segoe UI', sans-serif);
+    --mono:      var(--wks-font-mono, ui-monospace, 'JetBrains Mono', monospace);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    line-height: 1.45;
+    background: var(--bg);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  svg { flex: none; }
+
+  /* ── Header ───────────────────────────────────────────────────────────────
+     A docked chrome bar may keep border + fill: it is an edge, not a nested
+     surface (DESIGN_LANGUAGE §5). */
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    position: sticky; top: 0; z-index: 3;
+  }
+  header h1 { font-size: 0.9rem; font-weight: 700; margin: 0; letter-spacing: 0.01em; }
+  #tally { font-size: 0.72rem; color: var(--muted); }
+  #freshness {
+    margin-left: auto;
+    font-size: 0.66rem; color: var(--faint);
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .icon-btn {
+    appearance: none; padding: 0; cursor: pointer;
+    width: 26px; height: 26px; flex: none;
+    display: grid; place-items: center;
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    background: transparent; color: var(--muted);
+    transition: background 0.12s, color 0.12s;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--fg); }
+  .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .icon-btn[data-spin] svg { animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Group headings ─────────────────────────────────────────────────────── */
+  .group {
+    display: flex; align-items: center; gap: 6px;
+    padding: 16px 12px 4px;
+    font-size: 0.6rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--faint);
+  }
+  .group .n {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    letter-spacing: 0; color: var(--disabled);
+  }
+
+  /* ── Ticket rows ──────────────────────────────────────────────────────────
+     A list, not a gallery: rows separate with one hairline on the base
+     background rather than each drawing a border AND a fill. Twenty bordered
+     rectangles is the density problem the Surface rule exists to prevent. */
+  /* Flex, not grid: two children of a grid row both wanting `grid-row: 1/span 2`
+     makes auto-placement seat later items in the wrong column (it did — the
+     action landed in column 2 and shoved the title into column 3). Nested flex
+     has no placement algorithm to be surprised by. */
+  .row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--line);
+    transition: background 0.1s;
+  }
+  .row:hover { background: var(--hover); }
+  .group + .row { border-top: none; }
+  /* Finished work is context, not queue — present but visibly not the point. */
+  .row.is-done .summary { color: var(--muted); }
+  .row.is-done .prio { opacity: 0.5; }
+
+  .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .prio { flex: none; display: grid; place-items: center; width: 8px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--disabled); }
+  .dot.highest { background: var(--error); }
+  .dot.high    { background: var(--warning); }
+  .dot.medium  { background: var(--muted); }
+  .dot.low     { background: transparent; border: 1px solid var(--disabled); }
+
+  .main { min-width: 0; }
+  .title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .key {
+    font-family: var(--mono); font-size: 0.66rem; font-weight: 600;
+    color: var(--faint); flex: none;
+    transition: color 0.1s;
+  }
+  .row:hover .key { color: var(--accent-fg); }
+  .summary {
+    color: var(--fg); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  a.title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+
+  .meta {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    font-size: 0.66rem; color: var(--muted); min-width: 0;
+  }
+  .meta .sep { color: var(--disabled); }
+  .prio-text.highest { color: var(--error); }
+  .prio-text.high { color: var(--warning); }
+  .type { display: inline-flex; align-items: center; gap: 4px; }
+  .status {
+    padding: 0 6px; border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--muted) 14%, transparent);
+    color: var(--fg2); font-size: 0.6rem; font-weight: 600;
+  }
+  .status.progress { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+  .status.done     { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+
+  /* Hover-revealed action. It always occupies its space — only opacity moves —
+     so revealing it can never reflow the list under the pointer. */
+  .action { flex: none; }
+  .start {
+    appearance: none; cursor: pointer; white-space: nowrap;
+    font-family: inherit; font-size: 0.66rem; font-weight: 600;
+    padding: 4px 10px; border-radius: var(--r-sm);
+    border: 1px solid transparent; background: var(--accent); color: #fff;
+    display: inline-flex; align-items: center; gap: 6px;
+    opacity: 0; transition: opacity 0.12s, filter 0.12s;
+  }
+  .row:hover .start, .start:focus-visible { opacity: 1; }
+  .start:hover { filter: brightness(1.12); }
+  .start:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .start:disabled { cursor: default; filter: none; }
+  /* Touch: no hover to reveal with, so the action sits at half strength. */
+  @media (hover: none) { .start { opacity: 0.6; } }
+  /* In a split pane the reserved width of a hidden button is paid for by the
+     summary, which is the thing you are actually reading. Below this the button
+     keeps its glyph and drops its label. */
+  @media (max-width: 380px) {
+    .start .lbl { display: none; }
+    .start { padding: 5px 8px; gap: 0; }
+  }
+
+  .start.busy, .start.done {
+    opacity: 1; background: transparent; color: var(--muted);
+    border-color: var(--line);
+  }
+  .start.done { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+  .start.busy svg { animation: spin 0.7s linear infinite; }
+
+  /* ── Banners & states ─────────────────────────────────────────────────────
+     Border OR fill, never both: a tinted banner carries no outline. */
+  .banner {
+    display: flex; gap: 8px; align-items: flex-start;
+    margin: 10px 12px 0; padding: 8px 10px;
+    border-radius: var(--r-md);
+    font-size: 0.72rem; line-height: 1.5;
+    background: color-mix(in srgb, var(--error) 12%, transparent);
+    color: var(--error);
+  }
+  .banner.info { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--fg2); }
+  .banner code { font-family: var(--mono); font-size: 0.92em; }
+
+  .state { padding: 40px 24px; text-align: center; color: var(--muted); }
+  .state .glyph { color: var(--disabled); margin-bottom: 12px; }
+  .state h2 { font-size: 0.9rem; font-weight: 600; color: var(--fg); margin: 0 0 6px; }
+  .state p { margin: 0 auto; max-width: 34em; font-size: 0.72rem; line-height: 1.6; }
+  .steps {
+    margin: 16px auto 0; max-width: 30em; padding: 0; list-style: none;
+    text-align: left; font-size: 0.72rem; line-height: 1.6;
+  }
+  .steps li { display: flex; gap: 8px; padding: 3px 0; }
+  .steps .n {
+    flex: none; width: 17px; height: 17px; margin-top: 2px;
+    display: grid; place-items: center; border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--accent-fg); font-size: 0.6rem; font-weight: 700;
+  }
+  .state code, .steps code {
+    font-family: var(--mono); font-size: 0.92em;
+    background: color-mix(in srgb, var(--muted) 16%, transparent);
+    padding: 1px 5px; border-radius: var(--r-sm);
+  }
+  .fineprint { margin-top: 16px; font-size: 0.66rem; color: var(--faint); }
+
+  /* First paint only — never shown again once data has arrived, so a poll can
+     never blank the list the user is reading. */
+  .skeleton { padding: 8px 12px; border-top: 1px solid var(--line); }
+  .skeleton div {
+    height: 9px; border-radius: var(--r-pill);
+    background: var(--hover); animation: pulse 1.4s ease-in-out infinite;
+  }
+  .skeleton div + div { margin-top: 7px; height: 7px; }
+  @keyframes pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
+
+  #toast {
+    position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 5;
+    display: none; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: var(--r-lg);
+    background: var(--surface); color: var(--fg2);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+    font-size: 0.72rem;
+  }
+  #toast.err { color: var(--error); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Jira</h1>
+  <span id="tally"></span>
+  <span id="freshness"></span>
+  <button class="icon-btn" id="refresh" title="Refresh now" aria-label="Refresh now"></button>
+</header>
+<main id="main"></main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+  // The project this pane is scoped to. The host passes the agent workspace's
+  // directory; it is what a spawned agent gets as its cwd, and without it
+  // "start an agent" has nowhere to put one.
+  const CWD = new URLSearchParams(location.search).get('cwd') || '';
+
+  const $ = (id) => document.getElementById(id);
+  const main = $('main');
+
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+
+  // ── Icons ──────────────────────────────────────────────────────────────────
+  // Affordances are glyphs, never emoji or unicode punctuation
+  // (DESIGN_LANGUAGE §1). lucide geometry: currentColor, 1.75–2 stroke, round
+  // caps, sized to the text beside them.
+  const svg = (d, size, sw) =>
+    '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="' + (sw || 2) + '" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+
+  const ICON = {
+    refresh: (s) => svg('<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>', s || 13, 2),
+    play:    (s) => svg('<path d="M6 4l13 8-13 8z" fill="currentColor" stroke="none"/>', s || 10),
+    spinner: (s) => svg('<path d="M21 12a9 9 0 1 1-6.2-8.5" opacity="0.9"/>', s || 11),
+    check:   (s) => svg('<path d="M20 6L9 17l-5-5"/>', s || 11, 2.25),
+    // Issue types.
+    bug:     (s) => svg('<path d="M8 6a4 4 0 0 1 8 0"/><rect x="6" y="6" width="12" height="12" rx="6"/><path d="M3 12h3M18 12h3M4.5 7.5L7 9M19.5 7.5L17 9M4.5 17.5L7 16M19.5 17.5L17 16"/>', s || 11, 1.75),
+    story:   (s) => svg('<path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>', s || 11, 1.75),
+    task:    (s) => svg('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12l2 2 4-4"/>', s || 11, 1.75),
+    epic:    (s) => svg('<path d="M13 2L4.1 12.8a1 1 0 0 0 .8 1.6H11l-1 7.6 8.9-10.8a1 1 0 0 0-.8-1.6H12z"/>', s || 11, 1.75),
+    dot:     (s) => svg('<circle cx="12" cy="12" r="7"/>', s || 11, 1.75),
+    inbox:   (s) => svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.5L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z"/>', s || 22, 1.75),
+    key:     (s) => svg('<path d="M15.5 7.5a4.5 4.5 0 1 0-4.9 4.5L4 18.6V21h3l1-1v-2h2v-2h2l1.1-1.1a4.5 4.5 0 0 0 2.4-7.4z"/>', s || 22, 1.75),
+    alert:   (s) => svg('<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>', s || 14, 1.75),
+  };
+
+  const TYPE_ICON = (t) => {
+    const s = String(t || '').toLowerCase();
+    if (s.includes('bug') || s.includes('defect')) return ICON.bug();
+    if (s.includes('story')) return ICON.story();
+    if (s.includes('epic')) return ICON.epic();
+    if (s.includes('task') || s.includes('chore')) return ICON.task();
+    return ICON.dot();
+  };
+
+  // ── Formatting ─────────────────────────────────────────────────────────────
+  function ago(ms) {
+    if (!ms) return '';
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 45) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 60) return m + 'm ago';
+    const h = Math.round(m / 60);
+    if (h < 24) return h + 'h ago';
+    return Math.round(h / 24) + 'd ago';
+  }
+
+  const PRIO_CLASS = (p) => {
+    const s = String(p || '').toLowerCase();
+    if (s.includes('highest') || s.includes('blocker') || s.includes('critical')) return 'highest';
+    if (s.includes('high') || s.includes('major')) return 'high';
+    if (s.includes('low') || s.includes('trivial') || s.includes('minor')) return 'low';
+    return 'medium';
+  };
+
+  // In Progress before To Do before Done: "what am I in the middle of" is the
+  // question this pane exists to answer. Order WITHIN a group is left alone —
+  // that belongs to the user's own JQL ORDER BY.
+  const GROUPS = [
+    { key: 'indeterminate', label: 'In progress' },
+    { key: 'new', label: 'To do' },
+    { key: 'done', label: 'Done' },
+  ];
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  const started = new Map(); // issue key -> 'running' | 'done'
+  let last = null;           // last rendered payload, so a poll never blanks the list
+  let toastTimer = null;
+
+  function toast(msg, isErr) {
+    const el = $('toast');
+    el.innerHTML = (isErr ? ICON.alert(13) : ICON.check(13)) + '<span>' + esc(msg) + '</span>';
+    el.className = isErr ? 'err' : '';
+    el.style.display = 'flex';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.style.display = 'none'; }, 5000);
+  }
+
+  // ── Rendering ──────────────────────────────────────────────────────────────
+  /** Whether a status name says the same thing as its group heading. */
+  function sameAsGroup(status, label) {
+    const n = (x) => String(x || '').toLowerCase().replace(/[\s_-]+/g, '');
+    return n(status) === n(label);
+  }
+
+  function rowHtml(i, groupLabel) {
+    const state = started.get(i.key);
+    const cat = i.statusCategory;
+    const statusCls = cat === 'done' ? 'done' : cat === 'indeterminate' ? 'progress' : '';
+
+    const meta = [];
+    if (i.type) meta.push('<span class="type">' + TYPE_ICON(i.type) + esc(i.type) + '</span>');
+    // Only when the exact status says something the group heading didn't:
+    // a "To Do" pill under a TO DO heading is pure noise, "In Review" under
+    // IN PROGRESS is the useful half.
+    if (i.status && !sameAsGroup(i.status, groupLabel)) {
+      meta.push('<span class="status ' + statusCls + '">' + esc(i.status) + '</span>');
+    }
+    // The dot carries priority for scanning (with a tooltip for the exact
+    // value); spelling it out on every row only earns its space where it
+    // changes what you would pick up next.
+    const pc = PRIO_CLASS(i.priority);
+    if (i.priority && (pc === 'highest' || pc === 'high')) {
+      meta.push('<span class="prio-text ' + pc + '">' + esc(i.priority) + '</span>');
+    }
+    if (i.updated) {
+      const t = Date.parse(i.updated);
+      if (t) meta.push('<span>' + esc(ago(t)) + '</span>');
+    }
+
+    let btn;
+    if (state === 'running') {
+      btn = '<button class="start busy" disabled>' + ICON.spinner() +
+            '<span class="lbl">Starting…</span></button>';
+    } else if (state === 'done') {
+      btn = '<button class="start done" disabled title="An agent was started on this ticket">' +
+            ICON.check() + '<span class="lbl">Agent started</span></button>';
+    } else {
+      const dis = CWD ? '' : ' disabled';
+      const tip = CWD
+        ? 'Spawn an agent on ' + i.key + ' in this project'
+        : 'Open this pane inside a project to start an agent';
+      btn = '<button class="start" data-key="' + esc(i.key) + '" title="' + esc(tip) + '" ' +
+            'aria-label="' + esc(tip) + '"' + dis + '>' +
+            ICON.play() + '<span class="lbl">Start agent</span></button>';
+    }
+
+    return (
+      '<div class="row' + (cat === 'done' ? ' is-done' : '') + '">' +
+        '<span class="prio" title="' + esc(i.priority || 'No priority') + '">' +
+          '<span class="dot ' + PRIO_CLASS(i.priority) + '"></span>' +
+        '</span>' +
+        '<span class="body">' +
+          '<a class="title" href="' + esc(i.url) + '" target="_blank" rel="noreferrer" ' +
+            'title="Open ' + esc(i.key) + ' in Jira">' +
+            '<span class="key">' + esc(i.key) + '</span>' +
+            '<span class="summary">' + esc(i.summary || '(no summary)') + '</span>' +
+          '</a>' +
+          '<span class="meta">' + meta.join('<span class="sep">·</span>') + '</span>' +
+        '</span>' +
+        '<span class="action">' + btn + '</span>' +
+      '</div>'
+    );
+  }
+
+  function unconfiguredHtml() {
+    return (
+      '<div class="state">' +
+        '<div class="glyph">' + ICON.key(26) + '</div>' +
+        '<h2>Connect your Jira</h2>' +
+        '<p>Three fields in <strong>Settings → Plugins → Jira</strong> and your queue shows up here.</p>' +
+        '<ol class="steps">' +
+          '<li><span class="n">1</span><span><strong>Jira base URL</strong> — ' +
+            '<code>https://your-org.atlassian.net</code></span></li>' +
+          '<li><span class="n">2</span><span><strong>Account email</strong> — the Atlassian ' +
+            'account the token belongs to.</span></li>' +
+          '<li><span class="n">3</span><span><strong>API token</strong> — create one at ' +
+            '<code>id.atlassian.com</code> → Security → API tokens.</span></li>' +
+        '</ol>' +
+        '<p class="fineprint">The token is stored as a plugin secret: workspacer masks it as ' +
+          '<code>__WKS_SECRET__</code> everywhere it is read back, and only this plugin’s ' +
+          'sidecar ever sees the real value.</p>' +
+      '</div>'
+    );
+  }
+
+  function emptyHtml() {
+    return (
+      '<div class="state">' +
+        '<div class="glyph">' + ICON.inbox(26) + '</div>' +
+        '<h2>Nothing in your queue</h2>' +
+        '<p>No issues matched your JQL. Widen it in <strong>Settings → Plugins → Jira</strong> ' +
+          'if you expected something here.</p>' +
+      '</div>'
+    );
+  }
+
+  function skeletonHtml() {
+    let s = '';
+    for (let i = 0; i < 4; i++) {
+      s += '<div class="skeleton"><div style="width:' + (52 + i * 9) + '%"></div>' +
+           '<div style="width:' + (24 + i * 4) + '%"></div></div>';
+    }
+    return s;
+  }
+
+  function render(s) {
+    last = s;
+    const issues = s.issues || [];
+
+    // Counts what is still open: a queue of 6 that is 5 shipped tickets is a
+    // queue of 1, and the header should say so.
+    const open = issues.filter((i) => i.statusCategory !== 'done').length;
+    $('tally').textContent = s.configured && open
+      ? open + (open === 1 ? ' open' : ' open')
+      : '';
+    $('freshness').textContent = s.updatedAt ? ago(s.updatedAt) : '';
+
+    if (!s.configured) { main.innerHTML = unconfiguredHtml(); return; }
+
+    let html = '';
+
+    if (s.error) {
+      // 401/403 mean the credentials are wrong — say so, rather than making the
+      // user decode Jira's own wording.
+      const auth = /\b(401|403)\b/.test(s.error);
+      html +=
+        '<div class="banner">' + ICON.alert(14) + '<div>' +
+        (auth
+          ? '<strong>Jira rejected the credentials.</strong> Check the email and API token in ' +
+            'Settings → Plugins → Jira.'
+          : esc(s.error)) +
+        '</div></div>';
+    }
+
+    if (!CWD && issues.length) {
+      html +=
+        '<div class="banner info">' + ICON.alert(14) + '<div>' +
+        'This pane has no project, so agents can’t be started from it. Open Jira inside a ' +
+        'project workspace to enable <strong>Start agent</strong>.</div></div>';
+    }
+
+    if (!issues.length) {
+      // "Nothing matched your JQL" is a CLAIM about the queue, and a failed
+      // fetch does not support it — we don't know what is in there. When the
+      // poll errored, the banner is the whole message.
+      main.innerHTML = html + (s.error ? '' : emptyHtml());
+      return;
+    }
+
+    // Group by status category, preserving JQL order inside each group. Any
+    // category Jira invents that we don't know about still gets a section
+    // rather than vanishing.
+    const seen = new Set();
+    for (const g of GROUPS) {
+      const inGroup = issues.filter((i) => i.statusCategory === g.key);
+      inGroup.forEach((i) => seen.add(i.key));
+      if (!inGroup.length) continue;
+      html += '<div class="group">' + esc(g.label) +
+              '<span class="n">' + inGroup.length + '</span></div>';
+      html += inGroup.map((i) => rowHtml(i, g.label)).join('');
+    }
+    const rest = issues.filter((i) => !seen.has(i.key));
+    if (rest.length) {
+      html += '<div class="group">Other<span class="n">' + rest.length + '</span></div>';
+      html += rest.map((i) => rowHtml(i, 'Other')).join('');
+    }
+
+    main.innerHTML = html;
+  }
+
+  // ── Data ───────────────────────────────────────────────────────────────────
+  async function load() {
+    try {
+      render(await (await fetch('/state')).json());
+    } catch (e) {
+      // Only surface a dead sidecar when there is nothing already on screen —
+      // a blip during a poll must not replace a list the user is reading.
+      if (!last) {
+        main.innerHTML =
+          '<div class="state"><div class="glyph">' + ICON.alert(26) + '</div>' +
+          '<h2>Plugin sidecar unreachable</h2>' +
+          '<p>The Jira background process isn’t responding. Toggling the plugin off and on in ' +
+          'Settings → Plugins usually restarts it.</p></div>';
+      }
+    }
+  }
+
+  main.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button.start');
+    if (!btn || btn.disabled) return;
+    ev.preventDefault();
+    const key = btn.dataset.key;
+
+    // Optimistic and idempotent: the row owns the progress state, so a second
+    // click can't spawn a second agent while the first is still coming up.
+    started.set(key, 'running');
+    if (last) render(last);
+
+    try {
+      const res = await fetch('/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, cwd: CWD }),
+      });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || 'failed to start');
+      started.set(key, 'done');
+      toast('Agent started on ' + key);
+    } catch (e) {
+      started.delete(key);
+      toast(key + ': ' + e.message, true);
+    }
+    if (last) render(last);
+  });
+
+  const refreshBtn = $('refresh');
+  refreshBtn.innerHTML = ICON.refresh();
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.dataset.spin = '1';
+    await fetch('/refresh', { method: 'POST' }).catch(() => {});
+    setTimeout(async () => {
+      await load();
+      delete refreshBtn.dataset.spin;
+    }, 700);
+  });
+
+  main.innerHTML = skeletonHtml();
+  load();
+  setInterval(load, 15000);
+  // Freshness is the one per-second-ish thing here, and it only rewrites a
+  // single text node rather than re-rendering the list.
+  setInterval(() => {
+    if (last && last.updatedAt) $('freshness').textContent = ago(last.updatedAt);
+  }, 30000);
+</script>
+</body>
+</html>
