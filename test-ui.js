@@ -171,7 +171,11 @@ for (const [name, state] of Object.entries(SCENES)) {
   // The editor's own moving parts, named so a silent deletion is a test failure
   // rather than a button that stops doing anything.
   for (const id of ['sheet', 'tpl', 'chips', 'preview', 'saveBrief', 'resetBrief',
-                    'cancelBrief', 'editBrief', 'sheetClose']) {
+                    'cancelBrief', 'editBrief', 'sheetClose',
+                    // The brief LIST and the projects sheet.
+                    'briefPick', 'briefTitle', 'addBrief', 'delBrief',
+                    'psheet', 'maps', 'addMap', 'useCwd', 'saveMaps', 'cancelMaps',
+                    'editProjects', 'psheetClose']) {
     assert.ok(declared.has(id), 'the brief editor is missing #' + id);
   }
   // The token chips are built from what the SERVER advertises, so the two can

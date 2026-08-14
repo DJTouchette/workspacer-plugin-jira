@@ -6,3 +6,5 @@
 .disabled
 node_modules/
 .brief-template
+.briefs.json
+.projects.json

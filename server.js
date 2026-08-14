@@ -104,7 +104,28 @@ const BRIEF_TOKENS = [
   { token: 'priority', help: 'Highest, High…' },
   { token: 'assignee', help: 'display name' },
   { token: 'url', help: 'link back to Jira' },
+  // Fetching comments is a per-issue API call, so it is NOT part of the poll.
+  // A brief that uses this token is what triggers the fetch — which means the
+  // template IS the setting: a triage brief asks for the discussion, a fix
+  // brief doesn't, and neither needs a toggle to say so.
+  { token: 'comments', help: 'recent discussion (fetched only if used)' },
 ];
+
+/** Whether a template wants the discussion, and so whether to go and get it. */
+function wantsComments(template) {
+  return /\{\{\s*comments\s*\}\}/i.test(String(template || ''));
+}
+
+/** Jira comments → the flat text a brief embeds. Newest last, so the prompt
+ *  reads chronologically the way a human would scroll it. */
+function formatComments(comments) {
+  const list = Array.isArray(comments) ? comments : [];
+  if (!list.length) return '(No comments on this ticket.)';
+  return list
+    .map((c) => '— ' + (c.author || 'someone') + (c.created ? ' (' + c.created + ')' : '') +
+                ':\n' + (c.body || '').trim())
+    .join('\n\n');
+}
 
 /**
  * Fill a template from one issue.
@@ -126,6 +147,7 @@ function renderBrief(template, issue) {
     priority: i.priority || 'unset',
     assignee: i.assignee || 'unassigned',
     url: i.url || '',
+    comments: formatComments(i.comments),
   };
   return String(template == null ? '' : template).replace(
     /\{\{\s*(\w+)\s*\}\}/g,
@@ -139,6 +161,141 @@ function renderBrief(template, issue) {
 /** The brief for an issue using the DEFAULT template. */
 function briefFor(issue) {
   return renderBrief(DEFAULT_BRIEF, issue);
+}
+
+/**
+ * The briefs shipped out of the box. One prompt was never enough: picking up a
+ * ticket is not one job. Triaging an unclear bug, implementing an agreed fix
+ * and reproducing something are different asks and want different framing —
+ * and only the first of them wants the comment thread.
+ */
+const DEFAULT_BRIEFS = [
+  { id: 'understand', title: 'Understand first', template: DEFAULT_BRIEF },
+  {
+    id: 'triage',
+    title: 'Triage',
+    template: [
+      'Triage {{key}} — do not fix it yet.',
+      '',
+      'Title:    {{summary}}',
+      'Type:     {{type}}',
+      'Priority: {{priority}}',
+      'Link:     {{url}}',
+      '',
+      'Ticket description:',
+      '',
+      '{{description}}',
+      '',
+      'Discussion so far:',
+      '',
+      '{{comments}}',
+      '',
+      'Work out what is actually going on: reproduce it if you can, find the code',
+      'responsible, and say how big the change looks. Come back with a diagnosis and',
+      'a recommendation — not a patch. If the ticket is missing something you need,',
+      'say exactly what to ask for.',
+    ].join('\n'),
+  },
+  {
+    id: 'fix',
+    title: 'Fix',
+    template: [
+      'Implement {{key}}.',
+      '',
+      'Title:    {{summary}}',
+      'Link:     {{url}}',
+      '',
+      '{{description}}',
+      '',
+      'The diagnosis is settled; this is the implementation pass. Make the change,',
+      'cover it with a test that fails without it, and run the suite. Keep the diff',
+      'to the ticket — anything else you notice goes in your summary, not the patch.',
+      'If the ticket turns out to be wrong about the cause, stop and say so.',
+    ].join('\n'),
+  },
+];
+
+/** A stable, filename-safe id from a title. */
+function slugId(title) {
+  return String(title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'brief';
+}
+
+/**
+ * Coerce whatever is on disk into a usable brief list. Tolerant on purpose:
+ * this file is hand-editable, and a malformed entry should cost that entry, not
+ * the ability to start an agent. An empty result falls back to the shipped set,
+ * so there is never a state with no briefs at all.
+ */
+function normalizeBriefs(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const out = [];
+  const seen = new Set();
+  for (const b of list) {
+    if (!b || typeof b.template !== 'string' || !b.template.trim()) continue;
+    const title = String(b.title || '').trim() || 'Untitled';
+    let id = String(b.id || '').trim() || slugId(title);
+    while (seen.has(id)) id += '-2';
+    seen.add(id);
+    out.push({ id, title, template: b.template });
+  }
+  return out.length ? out : DEFAULT_BRIEFS.map((b) => ({ ...b }));
+}
+
+// ── Directory ↔ project mapping ──────────────────────────────────────────────
+
+/**
+ * The project prefix of an issue key: HVMS-142 → HVMS. Jira keys are
+ * `<PROJECT>-<number>` with the project part uppercase alphanumeric.
+ */
+function prefixOf(key) {
+  const m = /^([A-Z][A-Z0-9_]*)-\d+$/.exec(String(key || '').trim().toUpperCase());
+  return m ? m[1] : '';
+}
+
+/**
+ * Coerce the stored mapping into a usable list. Same tolerance as the briefs:
+ * a malformed row costs that row, not the feature. `jql` is the escape hatch
+ * for what a prefix can't say — a monorepo holding two projects, or one project
+ * split across repos by component — and is ANDed with the base JQL, never
+ * instead of it.
+ */
+function normalizeProjects(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const out = [];
+  for (const e of list) {
+    if (!e) continue;
+    const dir = String(e.dir || '').trim().replace(/\/+$/, '');
+    const prefix = String(e.prefix || '').trim().toUpperCase();
+    if (!dir || !prefix) continue;
+    out.push({ dir, prefix, jql: String(e.jql || '').trim() });
+  }
+  return out;
+}
+
+/**
+ * Which directories an issue could be worked in. Usually one; a prefix mapped
+ * to several directories (a project split across repos) legitimately yields
+ * more, and the caller asks rather than guessing.
+ */
+function dirsForIssue(key, projects) {
+  const p = prefixOf(key);
+  if (!p) return [];
+  return normalizeProjects(projects).filter((e) => e.prefix === p).map((e) => e.dir);
+}
+
+/**
+ * The issues a pane in `cwd` should show. An UNMAPPED cwd shows everything —
+ * that is today's behaviour and the right default: a pane that silently hides
+ * your queue because you never filled in a table is worse than one that shows
+ * too much. Only a directory you explicitly mapped gets filtered.
+ */
+function issuesForCwd(issues, cwd, projects) {
+  const all = Array.isArray(issues) ? issues : [];
+  if (!cwd) return all;
+  const here = normalizeProjects(projects).filter((e) => e.dir === String(cwd).replace(/\/+$/, ''));
+  if (!here.length) return all;
+  const prefixes = new Set(here.map((e) => e.prefix));
+  return all.filter((i) => prefixes.has(prefixOf(i.key)));
 }
 
 /** Settings → the resolved config, with a code default behind every key. */
@@ -173,6 +330,8 @@ function newlyArrived(prev, issues) {
 module.exports = {
   adfToText, normalize, briefFor, renderBrief, resolveConf, isConfigured,
   newlyArrived, DEFAULT_JQL, DEFAULT_BRIEF, BRIEF_TOKENS,
+  wantsComments, formatComments, DEFAULT_BRIEFS, normalizeBriefs, slugId,
+  prefixOf, normalizeProjects, dirsForIssue, issuesForCwd,
 };
 if (require.main !== module) return;
 
@@ -296,43 +455,131 @@ async function pollNow() {
 // Dot-prefixed and gitignored, like the other per-install state the host keeps
 // here (.settings.json, .bus-token), so a reinstall of the package doesn't
 // carry someone's edited prompt into the repo.
-const TEMPLATE_FILE = path.join(DIR, '.brief-template');
+const TEMPLATE_FILE = path.join(DIR, '.brief-template');   // legacy single template
+const BRIEFS_FILE = path.join(DIR, '.briefs.json');
+const PROJECTS_FILE = path.join(DIR, '.projects.json');
 
 // A prompt, not a payload: enough for a long house style, small enough that a
 // mistake can't fill the disk or the model's context.
 const MAX_TEMPLATE_CHARS = 20000;
 
-/** The active template — the stored one, or the default when none is stored. */
-function loadTemplate() {
+function readJsonFile(file) {
   try {
-    const raw = fs.readFileSync(TEMPLATE_FILE, 'utf8');
-    return raw.trim() ? raw : DEFAULT_BRIEF;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    return DEFAULT_BRIEF;
+    return null;
   }
 }
 
 /**
- * Persist a template, or clear it to fall back to the default. Storing a copy
- * of the default is treated as a reset: otherwise a user who edits and undoes
- * is pinned to today's wording forever, and never picks up an improved default
- * from a plugin update.
+ * The brief list. Migrates the single `.brief-template` this plugin shipped
+ * with first: someone who edited their one prompt must not lose it to an
+ * update that introduced the list, so it becomes the first entry and the old
+ * file is left alone as a backstop.
  */
-function saveTemplate(template) {
-  const t = String(template == null ? '' : template).slice(0, MAX_TEMPLATE_CHARS);
-  if (!t.trim() || t.trim() === DEFAULT_BRIEF.trim()) {
-    try { fs.unlinkSync(TEMPLATE_FILE); } catch {}
-    return { isDefault: true, template: DEFAULT_BRIEF };
+function loadBriefs() {
+  const stored = readJsonFile(BRIEFS_FILE);
+  if (stored) return normalizeBriefs(stored);
+  const legacy = (() => {
+    try {
+      const raw = fs.readFileSync(TEMPLATE_FILE, 'utf8');
+      return raw.trim() && raw.trim() !== DEFAULT_BRIEF.trim() ? raw : '';
+    } catch {
+      return '';
+    }
+  })();
+  if (legacy) {
+    return normalizeBriefs([
+      { id: 'custom', title: 'My brief', template: legacy },
+      ...DEFAULT_BRIEFS.filter((b) => b.id !== 'understand'),
+    ]);
   }
-  fs.writeFileSync(TEMPLATE_FILE, t, 'utf8');
-  return { isDefault: false, template: t };
+  return DEFAULT_BRIEFS.map((b) => ({ ...b }));
+}
+
+function saveBriefs(list) {
+  const clean = normalizeBriefs(
+    (Array.isArray(list) ? list : []).map((b) => ({
+      ...b,
+      template: String((b && b.template) || '').slice(0, MAX_TEMPLATE_CHARS),
+    })),
+  );
+  fs.writeFileSync(BRIEFS_FILE, JSON.stringify(clean, null, 2), 'utf8');
+  return clean;
+}
+
+/** Reset to the shipped set by removing the override, so a later, better
+ *  default actually reaches the user instead of being shadowed by a stale copy. */
+function resetBriefs() {
+  try { fs.unlinkSync(BRIEFS_FILE); } catch {}
+  return DEFAULT_BRIEFS.map((b) => ({ ...b }));
+}
+
+function loadProjects() {
+  return normalizeProjects(readJsonFile(PROJECTS_FILE) || []);
+}
+
+function saveProjects(list) {
+  const clean = normalizeProjects(list);
+  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(clean, null, 2), 'utf8');
+  return clean;
+}
+
+// ── Issue detail (description + comments), fetched on demand ─────────────────
+// NOT part of the poll: comments are a per-issue call, and pulling them for
+// fifty tickets a minute is how you earn a 429 for the whole org. The pane asks
+// when a row is expanded; a brief asks when its template uses {{comments}}.
+const MAX_COMMENTS = 20;
+const detailCache = new Map(); // key -> { at, comments }
+const DETAIL_TTL_MS = 60_000;
+
+async function fetchComments(key) {
+  const cached = detailCache.get(key);
+  if (cached && Date.now() - cached.at < DETAIL_TTL_MS) return cached.comments;
+  const c = conf();
+  if (!isConfigured(c)) return [];
+  const data = await jiraGet(
+    c,
+    '/rest/api/3/issue/' + encodeURIComponent(key) +
+      '/comment?orderBy=-created&maxResults=' + MAX_COMMENTS,
+  );
+  // orderBy=-created selects the most RECENT maxResults; the display order is
+  // then sorted here rather than assumed. Blind-reversing the response trusts
+  // the server to have honoured orderBy, and a thread rendered newest-first
+  // reads backwards in a prompt — the model sees the conclusion before the
+  // question. Sorting on the raw timestamp is correct either way.
+  const comments = (data.comments || [])
+    .map((x) => ({
+      author: (x.author && x.author.displayName) || '',
+      createdAt: String(x.created || ''),
+      body: adfToText(x.body).trim().slice(0, 2000),
+    }))
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
+    .map((x) => ({ author: x.author, created: x.createdAt.slice(0, 10), body: x.body }));
+  detailCache.set(key, { at: Date.now(), comments });
+  return comments;
 }
 
 // ── Ticket → agent ───────────────────────────────────────────────────────────
 
 /** Spawn an agent in `cwd` and hand it the brief. Returns the session id. */
-async function startAgent(issue, cwd) {
+async function startAgent(issue, cwd, briefId) {
   const c = conf();
+  const briefs = loadBriefs();
+  const brief = briefs.find((b) => b.id === briefId) || briefs[0];
+
+  // Only now, and only if this brief actually asks for the discussion.
+  let enriched = issue;
+  if (wantsComments(brief.template)) {
+    try {
+      enriched = { ...issue, comments: await fetchComments(issue.key) };
+    } catch (e) {
+      // A brief is still worth sending without its comments — better a slightly
+      // thinner prompt than no agent.
+      log('comments for ' + issue.key + ' failed, sending brief without them: ' + e.message);
+    }
+  }
+
   const spawned = await wks.call('agents.spawn', { provider: c.provider, cwd, label: issue.key });
   const sessionId = spawned && spawned.sessionId;
   if (!sessionId) throw new Error('agents.spawn returned no sessionId');
@@ -340,7 +587,7 @@ async function startAgent(issue, cwd) {
   // A fresh session needs a moment before it accepts input, and
   // agents.sendMessage throws while it doesn't — retry briefly rather than
   // dropping the brief and leaving the user an empty agent they didn't ask for.
-  const text = renderBrief(loadTemplate(), issue);
+  const text = renderBrief(brief.template, enriched);
   let lastErr = null;
   for (let attempt = 0; attempt < 15; attempt++) {
     try {
@@ -399,7 +646,18 @@ const server = http.createServer(async (req, res) => {
     return res.end('ok');
   }
   if (url === '/state') {
-    return sendJson(res, 200, Object.assign({ provider: conf().provider }, state));
+    const cwd = new URL(req.url || '/', 'http://x').searchParams.get('cwd') || '';
+    const projects = loadProjects();
+    const scoped = issuesForCwd(state.issues, cwd, projects);
+    return sendJson(res, 200, Object.assign({}, state, {
+      provider: conf().provider,
+      issues: scoped,
+      // So the pane can say "showing HVMS" rather than silently hiding things,
+      // and can enable Start agent for tickets whose directory it now knows
+      // even when the pane itself has no cwd.
+      scopedTo: projects.filter((e) => e.dir === cwd.replace(/\/+$/, '')).map((e) => e.prefix),
+      mapped: projects.length > 0,
+    }));
   }
   if (url === '/refresh' && req.method === 'POST') {
     pollNow();
@@ -415,32 +673,68 @@ const server = http.createServer(async (req, res) => {
     if (!issue) return sendJson(res, 404, { error: 'unknown issue ' + body.key });
     // Refused rather than defaulted: agents.spawn with no cwd lands in $HOME,
     // which is never where the ticket's code is.
-    if (!body.cwd) return sendJson(res, 400, { error: 'no project directory for this pane' });
+    // The pane's own cwd wins; otherwise the mapping resolves one. That is what
+    // makes Start agent work from the Overview pane, which has no cwd at all.
+    const candidates = dirsForIssue(issue.key, loadProjects());
+    const cwd = body.cwd || (candidates.length === 1 ? candidates[0] : '');
+    if (!cwd) {
+      return sendJson(res, 400, {
+        error: candidates.length
+          ? 'several directories are mapped to ' + prefixOf(issue.key) + ' — pick one'
+          : 'no project directory for this pane, and ' +
+            (prefixOf(issue.key) || 'this ticket') + ' is not mapped to one',
+        candidates,
+      });
+    }
     try {
-      return sendJson(res, 200, { sessionId: await startAgent(issue, body.cwd) });
+      return sendJson(res, 200, { sessionId: await startAgent(issue, cwd, body.briefId), cwd });
     } catch (e) {
       log('start failed: ' + e.message);
       return sendJson(res, 500, { error: e.message });
     }
   }
-  if (url === '/brief' && req.method === 'GET') {
-    const template = loadTemplate();
+  if (url === '/briefs' && req.method === 'GET') {
     return sendJson(res, 200, {
-      template,
-      isDefault: template === DEFAULT_BRIEF,
-      default: DEFAULT_BRIEF,
+      briefs: loadBriefs(),
+      defaults: DEFAULT_BRIEFS,
       tokens: BRIEF_TOKENS,
     });
   }
-  if (url === '/brief' && req.method === 'POST') {
+  if (url === '/briefs' && req.method === 'POST') {
     const body = await readBody(req);
     try {
-      return sendJson(res, 200, saveTemplate(body.reset ? '' : body.template));
+      return sendJson(res, 200, { briefs: body.reset ? resetBriefs() : saveBriefs(body.briefs) });
     } catch (e) {
       // A read-only plugin dir is the realistic failure. Say so — silently
       // discarding an edit the user just wrote is the worse outcome.
-      log('could not save the brief template: ' + e.message);
+      log('could not save briefs: ' + e.message);
       return sendJson(res, 500, { error: 'could not save: ' + e.message });
+    }
+  }
+  if (url === '/projects' && req.method === 'GET') {
+    return sendJson(res, 200, { projects: loadProjects() });
+  }
+  if (url === '/projects' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, { projects: saveProjects(body.projects) });
+    } catch (e) {
+      log('could not save projects: ' + e.message);
+      return sendJson(res, 500, { error: 'could not save: ' + e.message });
+    }
+  }
+  // Row expansion: the description we already have, plus the comment thread we
+  // deliberately do not poll for.
+  if (url.startsWith('/issue/') && url.endsWith('/detail')) {
+    const key = decodeURIComponent(url.slice('/issue/'.length, -'/detail'.length));
+    const issue = state.issues.find((i) => i.key === key);
+    if (!issue) return sendJson(res, 404, { error: 'unknown issue ' + key });
+    try {
+      return sendJson(res, 200, { key, description: issue.description, comments: await fetchComments(key) });
+    } catch (e) {
+      // The description is already in hand — show it rather than failing the
+      // whole expansion because the comment call was refused.
+      return sendJson(res, 200, { key, description: issue.description, comments: [], error: e.message });
     }
   }
   // Rendered by the SERVER so the preview is the exact text the agent will be
@@ -455,7 +749,13 @@ const server = http.createServer(async (req, res) => {
       type: 'Task', status: 'To Do', priority: 'Medium', assignee: 'you',
       url: 'https://example.atlassian.net/browse/PROJ-123',
     };
-    return sendJson(res, 200, { text: renderBrief(body.template, issue), key: issue.key });
+    let previewIssue = issue;
+    if (wantsComments(body.template) && issue.key) {
+      try {
+        previewIssue = { ...issue, comments: await fetchComments(issue.key) };
+      } catch { /* preview without them */ }
+    }
+    return sendJson(res, 200, { text: renderBrief(body.template, previewIssue), key: issue.key });
   }
   // One widget file, branching on the last path segment — matched before the
   // catch-all, which would otherwise hand a small tile the whole pane UI.

@@ -5,6 +5,8 @@ const assert = require('assert');
 const {
   adfToText, normalize, briefFor, renderBrief, resolveConf, isConfigured, newlyArrived,
   DEFAULT_JQL, DEFAULT_BRIEF, BRIEF_TOKENS,
+  wantsComments, formatComments, DEFAULT_BRIEFS, normalizeBriefs, slugId,
+  prefixOf, normalizeProjects, dirsForIssue, issuesForCwd,
 } = require('./server.js');
 
 // ── adfToText ────────────────────────────────────────────────────────────────
@@ -147,6 +149,87 @@ assert.strictEqual(
 );
 // Two of three is not configured — a half-filled form must not fire requests.
 assert.strictEqual(isConfigured(resolveConf({ baseUrl: 'https://x', email: 'a@b.c' })), false);
+
+// ── Directory ↔ project mapping ──────────────────────────────────────────────
+assert.strictEqual(prefixOf('HVMS-142'), 'HVMS');
+assert.strictEqual(prefixOf('hvms-142'), 'HVMS', 'keys are matched case-insensitively');
+assert.strictEqual(prefixOf('AB2-9'), 'AB2', 'digits are legal inside a project key');
+assert.strictEqual(prefixOf('not-a-key'), '');
+assert.strictEqual(prefixOf(''), '');
+assert.strictEqual(prefixOf(null), '');
+
+// A row missing either half is not a mapping; prefixes normalise to upper case
+// so a user typing "hvms" gets what they meant.
+assert.deepStrictEqual(
+  normalizeProjects([{ dir: '/a/', prefix: 'hvms' }, { dir: '', prefix: 'X' }, { prefix: 'Y' }, null]),
+  [{ dir: '/a', prefix: 'HVMS', jql: '' }],
+);
+
+const PROJ = [
+  { dir: '/repo/hvms', prefix: 'HVMS' },
+  { dir: '/repo/plat', prefix: 'PLAT' },
+  { dir: '/repo/hvms-ui', prefix: 'HVMS' },
+];
+assert.deepStrictEqual(dirsForIssue('HVMS-1', PROJ), ['/repo/hvms', '/repo/hvms-ui'],
+  'one prefix may legitimately map to several directories');
+assert.deepStrictEqual(dirsForIssue('PLAT-1', PROJ), ['/repo/plat']);
+assert.deepStrictEqual(dirsForIssue('NOPE-1', PROJ), []);
+
+const MIXED = [{ key: 'HVMS-1' }, { key: 'PLAT-9' }, { key: 'HVMS-2' }];
+assert.deepStrictEqual(issuesForCwd(MIXED, '/repo/hvms', PROJ).map((i) => i.key), ['HVMS-1', 'HVMS-2']);
+// Trailing slashes are a typing accident, not a different directory.
+assert.deepStrictEqual(issuesForCwd(MIXED, '/repo/hvms/', PROJ).map((i) => i.key), ['HVMS-1', 'HVMS-2']);
+// An UNMAPPED directory shows everything. Hiding someone's queue because they
+// never filled in a table is worse than showing too much.
+assert.strictEqual(issuesForCwd(MIXED, '/somewhere/else', PROJ).length, 3);
+assert.strictEqual(issuesForCwd(MIXED, '', PROJ).length, 3);
+assert.strictEqual(issuesForCwd(MIXED, '/repo/hvms', []).length, 3);
+
+// ── Briefs ───────────────────────────────────────────────────────────────────
+assert.ok(DEFAULT_BRIEFS.length >= 3, 'ship more than one, or the picker is pointless');
+assert.deepStrictEqual(DEFAULT_BRIEFS.map((b) => b.id), ['understand', 'triage', 'fix']);
+// The token IS the setting: a triage brief wants the discussion, a fix brief
+// does not, and neither needs a toggle to say so.
+assert.strictEqual(wantsComments(DEFAULT_BRIEFS.find((b) => b.id === 'triage').template), true);
+assert.strictEqual(wantsComments(DEFAULT_BRIEFS.find((b) => b.id === 'fix').template), false);
+assert.strictEqual(wantsComments('{{ COMMENTS }}'), true, 'spacing and case must not matter');
+assert.strictEqual(wantsComments('no tokens'), false);
+assert.strictEqual(wantsComments(null), false);
+
+assert.strictEqual(slugId('Investigate a Bug!'), 'investigate-a-bug');
+assert.strictEqual(slugId(''), 'brief');
+
+// A hand-editable file must not be able to leave you with nothing to start with.
+assert.deepStrictEqual(normalizeBriefs([]).map((b) => b.id), DEFAULT_BRIEFS.map((b) => b.id));
+assert.deepStrictEqual(normalizeBriefs(null).map((b) => b.id), DEFAULT_BRIEFS.map((b) => b.id));
+// A malformed entry costs that entry, not the feature.
+assert.deepStrictEqual(
+  normalizeBriefs([{ title: 'A', template: 'x' }, { title: 'B' }, null, { template: '   ' }])
+    .map((b) => b.title),
+  ['A'],
+);
+// Duplicate ids would make the caret menu ambiguous and the picker pick wrong.
+const dup = normalizeBriefs([
+  { id: 'x', title: 'One', template: 'a' },
+  { id: 'x', title: 'Two', template: 'b' },
+]);
+assert.strictEqual(new Set(dup.map((b) => b.id)).size, 2, 'ids must be unique');
+
+// ── formatComments ───────────────────────────────────────────────────────────
+assert.ok(/No comments/.test(formatComments([])), 'an empty thread says so rather than going blank');
+assert.ok(/No comments/.test(formatComments(null)));
+const fc = formatComments([
+  { author: 'Sam', created: '2026-08-10', body: 'First.' },
+  { author: 'Dana', created: '2026-08-11', body: 'Second.' },
+]);
+assert.ok(fc.indexOf('First.') < fc.indexOf('Second.'), 'the thread must read in order');
+assert.ok(fc.includes('Sam') && fc.includes('Dana'));
+// A comment with no author still renders rather than saying "undefined".
+assert.ok(!/undefined/.test(formatComments([{ body: 'anon' }])));
+
+// {{comments}} resolves through renderBrief like any other token.
+assert.ok(renderBrief('{{comments}}', { key: 'X', comments: [{ author: 'Sam', body: 'Hi' }] }).includes('Hi'));
+assert.ok(/No comments/.test(renderBrief('{{comments}}', { key: 'X' })));
 
 // ── newlyArrived ─────────────────────────────────────────────────────────────
 const A = { key: 'A' }, B = { key: 'B' };

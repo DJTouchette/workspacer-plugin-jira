@@ -185,6 +185,74 @@
   .start.done { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
   .start.busy svg { animation: spin 0.7s linear infinite; }
 
+  /* Row expansion. Clicking the row body opens the ticket in place; the KEY is
+     the link to Jira, so the two actions never fight over the same pixels. */
+  .body { cursor: pointer; }
+  .chev { flex: none; color: var(--disabled); display: grid; place-items: center;
+          transition: transform 0.12s, color 0.12s; }
+  .row:hover .chev { color: var(--muted); }
+  .row.open .chev { transform: rotate(90deg); color: var(--accent-fg); }
+  .detail {
+    padding: 2px 12px 12px 43px;
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--muted) 5%, transparent);
+  }
+  .detail h4 {
+    margin: 10px 0 4px; font-size: 0.6rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint);
+  }
+  .detail .desc {
+    margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: 0.72rem; line-height: 1.6; color: var(--fg2);
+  }
+  .cmt { padding: 6px 0; border-top: 1px solid var(--line); }
+  .cmt:first-of-type { border-top: none; }
+  .cmt .who {
+    font-size: 0.6rem; color: var(--faint); margin-bottom: 2px;
+    display: flex; gap: 6px; align-items: baseline;
+  }
+  .cmt .who b { color: var(--muted); font-weight: 600; }
+  .cmt .what {
+    margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: 0.72rem; line-height: 1.55; color: var(--fg2);
+  }
+  .detail .quiet { font-size: 0.72rem; color: var(--faint); }
+
+  /* Split action: the default brief on the left, the rest behind the caret. */
+  .action { flex: none; display: flex; align-items: center; position: relative; }
+  .caret {
+    appearance: none; cursor: pointer; padding: 4px 5px;
+    border: 1px solid transparent; border-left: 1px solid rgba(0,0,0,0.25);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    background: var(--accent); color: #fff;
+    display: inline-flex; align-items: center;
+    opacity: 0; transition: opacity 0.12s, filter 0.12s;
+  }
+  .row:hover .caret, .caret:focus-visible, .action.menu-open .caret { opacity: 1; }
+  .caret:hover { filter: brightness(1.12); }
+  .caret:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row:hover .start:not(.busy):not(.done) { border-radius: var(--r-sm) 0 0 var(--r-sm); }
+  @media (hover: none) { .caret { opacity: 0.6; } }
+
+  .menu {
+    position: absolute; right: 0; top: calc(100% + 4px); z-index: 3;
+    min-width: 168px; padding: 4px;
+    border-radius: var(--r-md); background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  }
+  .menu button {
+    appearance: none; display: block; width: 100%; text-align: left;
+    cursor: pointer; font-family: inherit; font-size: 0.72rem;
+    padding: 5px 8px; border: none; border-radius: var(--r-sm);
+    background: transparent; color: var(--fg2);
+  }
+  .menu button:hover { background: var(--hover); color: var(--fg); }
+  .menu .hint {
+    padding: 4px 8px 6px; font-size: 0.6rem; color: var(--faint);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+
   /* ── Banners & states ─────────────────────────────────────────────────────
      Border OR fill, never both: a tinted banner carries no outline. */
   .banner {
@@ -234,24 +302,24 @@
      A sheet over the pane rather than a modal dialog: it is a full editing
      task, not a confirmation, and there is nothing behind it worth peeking at
      while you write a prompt. */
-  #sheet {
+  #sheet, #psheet {
     position: fixed; inset: 0; z-index: 4; display: none;
     flex-direction: column; background: var(--bg);
   }
-  #sheet.open { display: flex; }
-  #sheet .sheet-head {
+  #sheet.open, #psheet.open { display: flex; }
+  #sheet .sheet-head, #psheet .sheet-head {
     display: flex; align-items: center; gap: 8px;
     padding: 10px 12px; border-bottom: 1px solid var(--line);
   }
-  #sheet .sheet-head h2 { font-size: 0.9rem; font-weight: 700; margin: 0; }
-  #sheet .sheet-head .grow { margin-left: auto; }
-  #sheet .sheet-body { flex: 1; overflow: auto; padding: 12px; }
-  #sheet .lede { font-size: 0.72rem; color: var(--muted); line-height: 1.6; margin: 0 0 10px; }
-  #sheet .sheet-foot {
+  #sheet .sheet-head h2, #psheet .sheet-head h2 { font-size: 0.9rem; font-weight: 700; margin: 0; }
+  #sheet .sheet-head .grow, #psheet .sheet-head .grow { margin-left: auto; }
+  #sheet .sheet-body, #psheet .sheet-body { flex: 1; overflow: auto; padding: 12px; }
+  #sheet .lede, #psheet .lede { font-size: 0.72rem; color: var(--muted); line-height: 1.6; margin: 0 0 10px; }
+  #sheet .sheet-foot, #psheet .sheet-foot {
     display: flex; align-items: center; gap: 8px;
     padding: 10px 12px; border-top: 1px solid var(--line);
   }
-  #sheet .sheet-foot .grow { margin-left: auto; }
+  #sheet .sheet-foot .grow, #psheet .sheet-foot .grow { margin-left: auto; }
 
   .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
   .chip {
@@ -262,6 +330,25 @@
   }
   .chip:hover { background: var(--hover); color: var(--accent-fg); }
   .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .field { display: block; margin-bottom: 8px; }
+  .field > span {
+    display: block; font-size: 0.6rem; font-weight: 600; color: var(--faint);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px;
+  }
+  .inp, .sel {
+    width: 100%; font-family: inherit; font-size: 0.72rem;
+    padding: 5px 8px; border-radius: var(--r-sm);
+    border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+  }
+  .inp.mono { font-family: var(--mono); }
+  .inp:focus, .sel:focus { outline: none; border-color: var(--accent); }
+  .maprow {
+    display: grid; grid-template-columns: 1fr 92px auto; gap: 6px;
+    align-items: center; margin-bottom: 6px;
+  }
+  .maprow .rm { padding: 4px 8px; }
+  .row-tools { display: flex; gap: 6px; align-items: center; margin-bottom: 12px; }
 
   #tpl {
     display: block; width: 100%; min-height: 260px; resize: vertical;
@@ -316,7 +403,9 @@
   <h1>Jira</h1>
   <span id="tally"></span>
   <span id="freshness"></span>
-  <button class="icon-btn" id="editBrief" title="Edit the agent brief"
+  <button class="icon-btn" id="editProjects" title="Map directories to Jira projects"
+          aria-label="Map directories to Jira projects"></button>
+  <button class="icon-btn" id="editBrief" title="Edit the agent briefs"
           aria-label="Edit the agent brief"></button>
   <button class="icon-btn" id="refresh" title="Refresh now" aria-label="Refresh now"></button>
 </header>
@@ -330,8 +419,17 @@
   <div class="sheet-body">
     <p class="lede">
       What a spawned agent is sent when you press <strong>Start agent</strong>.
-      Click a token to insert it.
+      Keep one per kind of job — triage, fix, reproduce — and pick from the caret
+      beside the button. Click a token to insert it.
     </p>
+    <div class="row-tools">
+      <select class="sel" id="briefPick" aria-label="Which brief"></select>
+      <button class="btn" id="addBrief" title="Add a brief">+ New</button>
+      <button class="btn" id="delBrief" title="Delete this brief">Delete</button>
+    </div>
+    <label class="field"><span>Title</span>
+      <input class="inp" id="briefTitle" spellcheck="false" placeholder="Triage" />
+    </label>
     <div class="chips" id="chips"></div>
     <textarea id="tpl" spellcheck="false" aria-label="Brief template"></textarea>
     <div class="preview-head">Preview <span id="previewKey"></span></div>
@@ -342,6 +440,31 @@
     <span class="grow"></span>
     <button class="btn" id="cancelBrief">Cancel</button>
     <button class="btn primary" id="saveBrief">Save</button>
+  </div>
+</div>
+<div id="psheet" role="dialog" aria-modal="true" aria-labelledby="psheetTitle">
+  <div class="sheet-head">
+    <h2 id="psheetTitle">Projects</h2>
+    <span class="grow"></span>
+    <button class="icon-btn" id="psheetClose" title="Close" aria-label="Close"></button>
+  </div>
+  <div class="sheet-body">
+    <p class="lede">
+      Tie a directory to a Jira project prefix. A pane in that directory shows only
+      that project, and <strong>Start agent</strong> knows where a ticket belongs —
+      so it works from the Overview pane too, where there is no directory of its own.
+      Unmapped directories keep showing everything.
+    </p>
+    <div id="maps"></div>
+    <div class="row-tools">
+      <button class="btn" id="addMap">+ Add mapping</button>
+      <button class="btn" id="useCwd" title="Fill in this pane's directory">Use this project</button>
+    </div>
+  </div>
+  <div class="sheet-foot">
+    <span class="grow"></span>
+    <button class="btn" id="cancelMaps">Cancel</button>
+    <button class="btn primary" id="saveMaps">Save</button>
   </div>
 </div>
 <div id="toast" role="status" aria-live="polite"></div>
@@ -381,6 +504,9 @@
     dot:     (s) => svg('<circle cx="12" cy="12" r="7"/>', s || 11, 1.75),
     inbox:   (s) => svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.5L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z"/>', s || 22, 1.75),
     key:     (s) => svg('<path d="M15.5 7.5a4.5 4.5 0 1 0-4.9 4.5L4 18.6V21h3l1-1v-2h2v-2h2l1.1-1.1a4.5 4.5 0 0 0 2.4-7.4z"/>', s || 22, 1.75),
+    chev:    (s) => svg('<path d="M9 18l6-6-6-6"/>', s || 11, 2),
+    folder:  (s) => svg('<path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/>', s || 13, 1.9),
+    caret:   (s) => svg('<path d="M6 9l6 6 6-6"/>', s || 10, 2.2),
     pencil:  (s) => svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', s || 13, 1.9),
     close:   (s) => svg('<path d="M18 6L6 18M6 6l12 12"/>', s || 13, 2),
     alert:   (s) => svg('<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>', s || 14, 1.75),
@@ -425,9 +551,22 @@
   ];
 
   // ── State ──────────────────────────────────────────────────────────────────
-  const started = new Map(); // issue key -> 'running' | 'done'
-  let last = null;           // last rendered payload, so a poll never blanks the list
+  const started = new Map();  // issue key -> 'running' | 'done'
+  const expanded = new Set();  // keys whose detail is open
+  const details = new Map();   // key -> { comments, error } once fetched
+  let briefs = [];             // [{id,title,template}] — the caret menu
+  let projects = [];           // [{dir,prefix,jql}] — directory ↔ project
+  let last = null;             // last rendered payload, so a poll never blanks the list
   let toastTimer = null;
+
+  const prefixOf = (key) => {
+    const m = /^([A-Z][A-Z0-9_]*)-\d+$/.exec(String(key || '').trim().toUpperCase());
+    return m ? m[1] : '';
+  };
+  const dirsFor = (key) => {
+    const p = prefixOf(key);
+    return p ? projects.filter((e) => e.prefix === p).map((e) => e.dir) : [];
+  };
 
   function toast(msg, isErr) {
     const el = $('toast');
@@ -478,31 +617,63 @@
       btn = '<button class="start done" disabled title="An agent was started on this ticket">' +
             ICON.check() + '<span class="lbl">Agent started</span></button>';
     } else {
-      const dis = CWD ? '' : ' disabled';
-      const tip = CWD
-        ? 'Spawn an agent on ' + i.key + ' in this project'
-        : 'Open this pane inside a project to start an agent';
+      // Enabled when the pane has a directory OR the mapping knows exactly one
+      // for this ticket's prefix — which is what makes the Overview pane useful.
+      const dirs = dirsFor(i.key);
+      const can = Boolean(CWD) || dirs.length === 1;
+      const tip = can
+        ? 'Spawn an agent on ' + i.key + (CWD ? ' in this project' : ' in ' + dirs[0])
+        : dirs.length
+          ? 'Several directories are mapped to ' + prefixOf(i.key) + ' — open one of them'
+          : 'Map ' + (prefixOf(i.key) || 'this project') + ' to a directory, or open this pane in one';
       btn = '<button class="start" data-key="' + esc(i.key) + '" title="' + esc(tip) + '" ' +
-            'aria-label="' + esc(tip) + '"' + dis + '>' +
-            ICON.play() + '<span class="lbl">Start agent</span></button>';
+            'aria-label="' + esc(tip) + '"' + (can ? '' : ' disabled') + '>' +
+            ICON.play() + '<span class="lbl">Start agent</span></button>' +
+            (can && briefs.length > 1
+              ? '<button class="caret" data-menu="' + esc(i.key) + '" ' +
+                'title="Start with a different brief" aria-label="Choose a brief">' +
+                ICON.caret() + '</button>'
+              : '');
     }
 
+    const open = expanded.has(i.key);
+    const detail = open ? '<div class="detail">' + detailHtml(i) + '</div>' : '';
+
     return (
-      '<div class="row' + (cat === 'done' ? ' is-done' : '') + '">' +
+      '<div class="row' + (cat === 'done' ? ' is-done' : '') + (open ? ' open' : '') +
+        '" data-key="' + esc(i.key) + '">' +
         '<span class="prio" title="' + esc(i.priority || 'No priority') + '">' +
           '<span class="dot ' + PRIO_CLASS(i.priority) + '"></span>' +
         '</span>' +
-        '<span class="body">' +
-          '<a class="title" href="' + esc(i.url) + '" target="_blank" rel="noreferrer" ' +
-            'title="Open ' + esc(i.key) + ' in Jira">' +
-            '<span class="key">' + esc(i.key) + '</span>' +
+        '<span class="body" data-expand="' + esc(i.key) + '" role="button" tabindex="0" ' +
+          'aria-expanded="' + (open ? 'true' : 'false') + '">' +
+          '<span class="title">' +
+            '<a class="key" href="' + esc(i.url) + '" target="_blank" rel="noreferrer" ' +
+              'title="Open ' + esc(i.key) + ' in Jira">' + esc(i.key) + '</a>' +
             '<span class="summary">' + esc(i.summary || '(no summary)') + '</span>' +
-          '</a>' +
+          '</span>' +
           '<span class="meta">' + meta.join('<span class="sep">·</span>') + '</span>' +
         '</span>' +
+        '<span class="chev">' + ICON.chev() + '</span>' +
         '<span class="action">' + btn + '</span>' +
-      '</div>'
+      '</div>' + detail
     );
+  }
+
+  /** The expanded body: the description we already have, plus the comment
+   *  thread, which is fetched once per ticket and only when asked for. */
+  function detailHtml(i) {
+    const d = details.get(i.key);
+    let html = '<h4>Description</h4>' +
+      '<p class="desc">' + esc(i.description || '(The ticket has no description.)') + '</p>';
+    if (!d) return html + '<h4>Comments</h4><div class="quiet">Loading…</div>';
+    if (d.error) return html + '<h4>Comments</h4><div class="quiet">Could not load comments: ' +
+      esc(d.error) + '</div>';
+    if (!d.comments.length) return html + '<h4>Comments</h4><div class="quiet">No comments.</div>';
+    return html + '<h4>Comments</h4>' + d.comments.map((c) =>
+      '<div class="cmt"><div class="who"><b>' + esc(c.author || 'someone') + '</b>' +
+      '<span>' + esc(c.created) + '</span></div>' +
+      '<p class="what">' + esc(c.body) + '</p></div>').join('');
   }
 
   function unconfiguredHtml() {
@@ -612,9 +783,11 @@
   }
 
   // ── Data ───────────────────────────────────────────────────────────────────
+  const STATE_URL = '/state' + (CWD ? '?cwd=' + encodeURIComponent(CWD) : '');
+
   async function load() {
     try {
-      render(await (await fetch('/state')).json());
+      render(await (await fetch(STATE_URL)).json());
     } catch (e) {
       // Only surface a dead sidecar when there is nothing already on screen —
       // a blip during a poll must not replace a list the user is reading.
@@ -628,38 +801,115 @@
     }
   }
 
-  main.addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('button.start');
-    if (!btn || btn.disabled) return;
-    ev.preventDefault();
-    const key = btn.dataset.key;
+  /** Fetch a ticket's comments once, then re-render so the row fills in. */
+  async function loadDetail(key) {
+    if (details.has(key)) return;
+    try {
+      const d = await (await fetch('/issue/' + encodeURIComponent(key) + '/detail')).json();
+      details.set(key, { comments: d.comments || [], error: d.error || '' });
+    } catch (e) {
+      details.set(key, { comments: [], error: e.message });
+    }
+    if (last) render(last);
+  }
 
+  function closeMenus() {
+    for (const m of document.querySelectorAll('.menu')) m.remove();
+    for (const a of document.querySelectorAll('.action.menu-open')) a.classList.remove('menu-open');
+  }
+
+  async function startOn(key, briefId, btn) {
+    if (started.get(key)) return;
     // Optimistic and idempotent: the row owns the progress state, so a second
     // click can't spawn a second agent while the first is still coming up.
     started.set(key, 'running');
     if (last) render(last);
-
     try {
       const res = await fetch('/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, cwd: CWD }),
+        body: JSON.stringify({ key, cwd: CWD, briefId }),
       });
       const out = await res.json();
       if (!res.ok) throw new Error(out.error || 'failed to start');
       started.set(key, 'done');
-      toast('Agent started on ' + key);
+      const brief = briefs.find((b) => b.id === briefId);
+      toast('Agent started on ' + key + (brief ? ' — ' + brief.title : ''));
     } catch (e) {
       started.delete(key);
       toast(key + ': ' + e.message, true);
     }
     if (last) render(last);
+  }
+
+  main.addEventListener('click', async (ev) => {
+    // The key is a link to Jira; everything else in the body toggles the row.
+    if (ev.target.closest('a.key')) return;
+
+    const caret = ev.target.closest('button.caret');
+    if (caret) {
+      ev.preventDefault();
+      const wasOpen = caret.parentElement.classList.contains('menu-open');
+      closeMenus();
+      if (wasOpen) return;
+      const key = caret.dataset.menu;
+      const menu = document.createElement('div');
+      menu.className = 'menu';
+      menu.innerHTML = '<div class="hint">Start with</div>' + briefs
+        .map((b) => '<button data-start="' + esc(key) + '" data-brief="' + esc(b.id) + '">' +
+                    esc(b.title) + '</button>').join('');
+      caret.parentElement.classList.add('menu-open');
+      caret.parentElement.appendChild(menu);
+      return;
+    }
+
+    const pick = ev.target.closest('.menu button[data-brief]');
+    if (pick) {
+      const key = pick.dataset.start;
+      const briefId = pick.dataset.brief;
+      closeMenus();
+      return startOn(key, briefId);
+    }
+
+    const btn = ev.target.closest('button.start');
+    if (btn) {
+      ev.preventDefault();
+      if (btn.disabled) return;
+      closeMenus();
+      // The bare button uses the first brief — the one at the top of the list is
+      // the default by construction, so reordering in the editor sets it.
+      return startOn(btn.dataset.key, briefs[0] && briefs[0].id);
+    }
+
+    const body = ev.target.closest('[data-expand]');
+    if (body) {
+      closeMenus();
+      const key = body.dataset.expand;
+      if (expanded.has(key)) expanded.delete(key);
+      else { expanded.add(key); loadDetail(key); }
+      if (last) render(last);
+    }
+  });
+
+  // Keyboard parity for the expander, which is a span playing the part of a
+  // button so the row can stay one flex line.
+  main.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const body = ev.target.closest('[data-expand]');
+    if (!body) return;
+    ev.preventDefault();
+    body.click();
+  });
+
+  document.addEventListener('click', (ev) => {
+    if (!ev.target.closest('.action')) closeMenus();
   });
 
   // ── Brief editor ───────────────────────────────────────────────────────────
   const sheet = $('sheet');
   const tpl = $('tpl');
-  let briefDefault = '';
+  let editing = [];      // working copy — Cancel must not have changed anything
+  let editingIdx = 0;
   let previewTimer = null;
 
   function insertToken(token) {
@@ -671,6 +921,33 @@
     // clicking a chip should feel like typing, not like leaving the field.
     tpl.selectionStart = tpl.selectionEnd = start + t.length;
     tpl.focus();
+    stash();
+    schedulePreview();
+  }
+
+  /** Copy the visible fields back into the working list. */
+  function stash() {
+    const b = editing[editingIdx];
+    if (!b) return;
+    b.title = $('briefTitle').value;
+    b.template = tpl.value;
+  }
+
+  function paintBriefList() {
+    $('briefPick').innerHTML = editing
+      .map((b, i) => '<option value="' + i + '"' + (i === editingIdx ? ' selected' : '') + '>' +
+                     esc(b.title || 'Untitled') + (i === 0 ? ' (default)' : '') + '</option>')
+      .join('');
+    $('delBrief').disabled = editing.length < 2;
+  }
+
+  function paintBrief() {
+    const b = editing[editingIdx] || { title: '', template: '' };
+    $('briefTitle').value = b.title || '';
+    tpl.value = b.template || '';
+    tpl.selectionStart = tpl.selectionEnd = 0;
+    tpl.scrollTop = 0;
+    paintBriefList();
     schedulePreview();
   }
 
@@ -679,7 +956,7 @@
       const res = await fetch('/brief/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template: tpl.value }),
+        body: JSON.stringify({ template: tpl.value, key: [...expanded][0] }),
       });
       const out = await res.json();
       $('preview').textContent = out.text || '';
@@ -698,24 +975,21 @@
 
   async function openBrief() {
     try {
-      const b = await (await fetch('/brief')).json();
-      briefDefault = b.default || '';
-      tpl.value = b.template || '';
+      const b = await (await fetch('/briefs')).json();
+      // Deep copy: the sheet edits a working set, so Cancel really cancels.
+      editing = (b.briefs || []).map((x) => ({ ...x }));
+      editingIdx = 0;
       $('chips').innerHTML = (b.tokens || [])
         .map((t) => '<button class="chip" data-token="' + esc(t.token) + '" ' +
                     'title="' + esc(t.help) + '">{{' + esc(t.token) + '}}</button>')
         .join('');
-      $('resetBrief').disabled = !!b.isDefault;
       sheet.classList.add('open');
-      refreshPreview();
+      paintBrief();
       tpl.focus();
-      // Focusing a textarea whose value was just set lands the caret at the end,
-      // so the editor opened showing the BOTTOM of the user's own prompt. Start
-      // at the top, where the prompt starts.
       tpl.selectionStart = tpl.selectionEnd = 0;
       tpl.scrollTop = 0;
     } catch (e) {
-      toast('Could not load the brief: ' + e.message, true);
+      toast('Could not load the briefs: ' + e.message, true);
     }
   }
 
@@ -733,31 +1007,147 @@
     const chip = ev.target.closest('.chip');
     if (chip) insertToken(chip.dataset.token);
   });
-  tpl.addEventListener('input', schedulePreview);
-  $('resetBrief').addEventListener('click', () => {
-    tpl.value = briefDefault;
-    schedulePreview();
-    tpl.focus();
+  tpl.addEventListener('input', () => { stash(); schedulePreview(); });
+  $('briefTitle').addEventListener('input', () => { stash(); paintBriefList(); });
+  $('briefPick').addEventListener('change', (ev) => {
+    stash();
+    editingIdx = Number(ev.target.value) || 0;
+    paintBrief();
   });
-  $('saveBrief').addEventListener('click', async () => {
+  $('addBrief').addEventListener('click', () => {
+    stash();
+    editing.push({ id: '', title: 'New brief', template: tpl.value || '' });
+    editingIdx = editing.length - 1;
+    paintBrief();
+    $('briefTitle').focus();
+    $('briefTitle').select();
+  });
+  $('delBrief').addEventListener('click', () => {
+    if (editing.length < 2) return;
+    editing.splice(editingIdx, 1);
+    editingIdx = Math.max(0, editingIdx - 1);
+    paintBrief();
+  });
+  $('resetBrief').addEventListener('click', async () => {
     try {
-      const res = await fetch('/brief', {
+      const out = await (await fetch('/briefs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template: tpl.value }),
+        body: JSON.stringify({ reset: true }),
+      })).json();
+      editing = (out.briefs || []).map((x) => ({ ...x }));
+      editingIdx = 0;
+      briefs = out.briefs || [];
+      paintBrief();
+      toast('Briefs reset to the shipped set');
+    } catch (e) {
+      toast('Could not reset: ' + e.message, true);
+    }
+  });
+  $('saveBrief').addEventListener('click', async () => {
+    stash();
+    try {
+      const res = await fetch('/briefs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ briefs: editing }),
       });
       const out = await res.json();
       if (!res.ok) throw new Error(out.error || 'save failed');
+      briefs = out.briefs || [];
       closeBrief();
-      toast(out.isDefault ? 'Brief reset to the default' : 'Brief saved');
+      if (last) render(last);
+      toast(briefs.length + (briefs.length === 1 ? ' brief saved' : ' briefs saved'));
     } catch (e) {
-      toast('Could not save the brief: ' + e.message, true);
+      toast('Could not save: ' + e.message, true);
     }
   });
-  // Esc closes the sheet — it is the only thing on screen when open, so there is
-  // nothing else the key could mean.
+  // Esc closes whichever sheet is open — they are the only thing on screen when
+  // they are, so there is nothing else the key could mean.
   document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && sheet.classList.contains('open')) closeBrief();
+    if (ev.key !== 'Escape') return;
+    if (sheet.classList.contains('open')) closeBrief();
+    if ($('psheet').classList.contains('open')) closeMaps();
+  });
+
+  // ── Projects (directory ↔ prefix) ──────────────────────────────────────────
+  const psheet = $('psheet');
+  let mapping = [];
+
+  function paintMaps() {
+    $('maps').innerHTML = mapping.length
+      ? mapping.map((m, i) =>
+          '<div class="maprow">' +
+            '<input class="inp mono" data-map="dir" data-i="' + i + '" spellcheck="false" ' +
+              'placeholder="/home/you/project" value="' + esc(m.dir) + '" aria-label="Directory" />' +
+            '<input class="inp mono" data-map="prefix" data-i="' + i + '" spellcheck="false" ' +
+              'placeholder="HVMS" value="' + esc(m.prefix) + '" aria-label="Project prefix" />' +
+            '<button class="btn rm" data-rm="' + i + '" title="Remove this mapping" ' +
+              'aria-label="Remove this mapping">' + ICON.close(11) + '</button>' +
+          '</div>')
+        .join('')
+      : '<div class="quiet" style="font-size:0.72rem;color:var(--faint);padding:4px 0 8px">' +
+        'No mappings yet — every pane shows your whole queue.</div>';
+  }
+
+  function openMaps() {
+    fetch('/projects')
+      .then((r) => r.json())
+      .then((d) => {
+        mapping = (d.projects || []).map((x) => ({ ...x }));
+        paintMaps();
+        psheet.classList.add('open');
+      })
+      .catch((e) => toast('Could not load projects: ' + e.message, true));
+  }
+
+  function closeMaps() { psheet.classList.remove('open'); }
+
+  $('editProjects').innerHTML = ICON.folder();
+  $('psheetClose').innerHTML = ICON.close();
+  $('editProjects').addEventListener('click', openMaps);
+  $('psheetClose').addEventListener('click', closeMaps);
+  $('cancelMaps').addEventListener('click', closeMaps);
+  $('addMap').addEventListener('click', () => {
+    mapping.push({ dir: '', prefix: '', jql: '' });
+    paintMaps();
+  });
+  // Typing an absolute path by hand is miserable, and the pane already knows one.
+  $('useCwd').addEventListener('click', () => {
+    if (!CWD) return toast('This pane has no project directory', true);
+    if (!mapping.some((m) => m.dir === CWD)) mapping.push({ dir: CWD, prefix: '', jql: '' });
+    paintMaps();
+    const last = $('maps').querySelector('[data-map="prefix"][data-i="' + (mapping.length - 1) + '"]');
+    if (last) last.focus();
+  });
+  $('maps').addEventListener('input', (ev) => {
+    const el = ev.target.closest('[data-map]');
+    if (!el) return;
+    mapping[Number(el.dataset.i)][el.dataset.map] = el.value;
+  });
+  $('maps').addEventListener('click', (ev) => {
+    const rm = ev.target.closest('[data-rm]');
+    if (!rm) return;
+    mapping.splice(Number(rm.dataset.rm), 1);
+    paintMaps();
+  });
+  $('saveMaps').addEventListener('click', async () => {
+    try {
+      const res = await fetch('/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projects: mapping }),
+      });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || 'save failed');
+      projects = out.projects || [];
+      closeMaps();
+      // The scope changed, so the list has to come from the sidecar again.
+      load();
+      toast(projects.length ? projects.length + ' mapping(s) saved' : 'Mappings cleared');
+    } catch (e) {
+      toast('Could not save: ' + e.message, true);
+    }
   });
 
   const refreshBtn = $('refresh');
@@ -771,8 +1161,17 @@
     }, 700);
   });
 
+  async function loadConfig() {
+    try {
+      briefs = (await (await fetch('/briefs')).json()).briefs || [];
+    } catch { briefs = []; }
+    try {
+      projects = (await (await fetch('/projects')).json()).projects || [];
+    } catch { projects = []; }
+  }
+
   main.innerHTML = skeletonHtml();
-  load();
+  loadConfig().then(load);
   setInterval(load, 15000);
   // Freshness is the one per-second-ish thing here, and it only rewrites a
   // single text node rather than re-rendering the list.
