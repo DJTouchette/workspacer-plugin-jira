@@ -2,7 +2,7 @@
   "id": "djtouchette.jira",
   "name": "Jira",
   "apiVersion": "1",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "server": {
     "command": "node",
     "args": [
@@ -15,7 +15,7 @@
     {
       "type": "djtouchette.jira",
       "title": "Jira",
-      "icon": "\ud83c\udfab",
+      "icon": "🎫",
       "scope": "both",
       "path": "/"
     }
@@ -24,7 +24,7 @@
     {
       "id": "queue",
       "title": "My tickets",
-      "icon": "\ud83c\udfab",
+      "icon": "🎫",
       "sizes": [
         "small",
         "medium",
@@ -39,7 +39,7 @@
       "label": "Jira base URL",
       "type": "string",
       "default": "",
-      "help": "e.g. https://your-org.atlassian.net \u2014 no trailing slash."
+      "help": "e.g. https://your-org.atlassian.net — no trailing slash."
     },
     {
       "key": "email",
@@ -53,7 +53,7 @@
       "label": "Jira API token",
       "type": "string",
       "default": "",
-      "help": "Create at id.atlassian.com \u2192 Security \u2192 API tokens.",
+      "help": "Create at id.atlassian.com → Security → API tokens.",
       "secret": true
     },
     {
@@ -96,15 +96,15 @@
       "type": "string",
       "default": "",
       "scope": "project",
-      "help": "This directory's Jira project key, e.g. HVMS. Set per project in Settings \u2192 Projects."
+      "help": "This directory's Jira project key, e.g. HVMS. Set per project in Settings → Projects."
     },
     {
-      "key": "jql",
+      "key": "projectJql",
       "label": "Extra JQL",
       "type": "string",
       "default": "",
       "scope": "project",
-      "help": "Optional. ANDed with the base JQL for this project \u2014 for a monorepo holding two projects, or one split by component."
+      "help": "Optional. ANDed with the base JQL for this project — for a monorepo holding two projects, or one split by component."
     }
   ],
   "capabilities": [
@@ -113,5 +113,46 @@
     "notifications.post",
     "config.get"
   ],
-  "consumes": []
+  "consumes": [],
+  "provides": [
+    "djtouchette.jira.search",
+    "djtouchette.jira.issue"
+  ],
+  "tools": [
+    {
+      "name": "search",
+      "description": "Search Jira issues with a JQL query (omit jql to use the plugin's configured default search). Returns up to maxResults issues with key, summary, status, assignee, priority, updated, and url.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jql": {
+            "type": "string",
+            "description": "JQL query; omit for the configured default"
+          },
+          "maxResults": {
+            "type": "number",
+            "description": "cap on returned issues (default 20, max 50)"
+          }
+        }
+      },
+      "method": "djtouchette.jira.search"
+    },
+    {
+      "name": "issue",
+      "description": "Fetch one Jira issue by key (e.g. HVMS-12): summary, status, description, and the most recent comments.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "the issue key, e.g. HVMS-12"
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "method": "djtouchette.jira.issue"
+    }
+  ]
 }

@@ -69,6 +69,17 @@ A few deliberate choices:
 - **The header says which project you're in.** A pane opened beside an agent draws that project's mark and label exactly as workspacer draws them elsewhere — the configured emoji or favicon, or initials on a colour derived from the directory's path. The sidecar resolves it from `config.projects` (one `config.get`, cached) and hands it to the pane on `/state`; resolution mirrors the host's `projectIdentity.ts`, palette and hash included. A *downloaded* icon falls back to the emoji or the initials, because the `workspacer-icon://` scheme that serves it is not registered in the session a plugin webview runs in.
 - **Every state is designed**, not an afterthought: first-run setup with the three fields numbered, a skeleton on first paint (never again — a poll can't blank a list you're reading), an empty queue, a 401 translated into "Jira rejected the credentials", and a transient 500 that keeps the last good list on screen. A failed fetch never claims your queue is empty, because it didn't read it.
 
+## Agent tools
+
+Since 1.4.0 the plugin contributes two MCP tools to workspacer's agent facade
+(`mcp__workspacer__djtouchette_jira_search` and `…_issue`): JQL search and
+single-issue detail (description + recent comments). They are opt-in per
+session — spawn an agent with `toolScope` plus `pluginTools:
+["djtouchette.jira"]` and it can query Jira itself, with the sidecar doing the
+authenticated calls (the agent never sees the API token). Declared in
+`plugin.json` (`provides` + `tools`), answered in `server.js` via
+`wks.provide()`.
+
 ## Notes
 
 - **Jira Cloud only.** Auth is Basic `email:apiToken`, which is Cloud's REST scheme. Jira Server/Data Center uses bearer PATs — the `jiraGet` helper is the one place to change.

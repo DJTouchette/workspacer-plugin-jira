@@ -40,6 +40,7 @@ function connect(opts = {}) {
         );
       },
       publish: () => {},
+      provide: () => {},
       on: () => {},
       onStatus: (cb) => { try { cb(false); } catch {} },
       settings: readSettings(),
@@ -49,6 +50,7 @@ function connect(opts = {}) {
   const source = opts.source || 'sidecar';
   const listeners = new Map(); // type -> Set(cb)
   const pending = new Map(); // id -> { resolve, reject }
+  const providers = new Map(); // method -> async handler(params) => result
   const statusListeners = new Set(); // cb(connected)
   let ws = null;
   let seq = 1;
@@ -75,6 +77,9 @@ function connect(opts = {}) {
     ws.addEventListener('open', () => {
       connected = true;
       ws.send(JSON.stringify({ op: 'subscribe', topics: ['*'] }));
+      if (providers.size) {
+        ws.send(JSON.stringify({ op: 'register', methods: [...providers.keys()] }));
+      }
       markReady();
       fireStatus(true);
     });
@@ -83,6 +88,22 @@ function connect(opts = {}) {
       try {
         f = JSON.parse(typeof ev.data === 'string' ? ev.data : ev.data.toString());
       } catch {
+        return;
+      }
+      if (f.op === 'call' && f.method) {
+        // Inbound RPC: the hub routed a caller's capability call here because
+        // we registered the method (manifest `provides`). Reply on the SAME id
+        // (the router's global correlation id).
+        const handler = providers.get(f.method);
+        const reply = (frame) => { try { ws.send(JSON.stringify(frame)); } catch {} };
+        if (!handler) {
+          reply({ op: 'error', id: f.id, error: 'no handler for ' + f.method });
+          return;
+        }
+        Promise.resolve()
+          .then(() => handler(f.params))
+          .then((result) => reply({ op: 'result', id: f.id, result: result === undefined ? null : result }))
+          .catch((err) => reply({ op: 'error', id: f.id, error: String((err && err.message) || err) }));
         return;
       }
       if (f.op === 'event' && f.event) {
@@ -127,6 +148,19 @@ function connect(opts = {}) {
     },
     publish(type, data = {}) {
       ws.send(JSON.stringify({ op: 'publish', event: { type, source, data } }));
+    },
+    // provide(method, handler) — answer a bus method declared in the manifest
+    // `provides` (and, via a manifest `tools` entry, exposed to agents as an
+    // MCP tool through the workspacer facade). handler(params) may return a
+    // value or a Promise; a throw becomes the caller's error reply.
+    // Registration is sent now and re-sent on every reconnect; the hub drops
+    // methods the consented grant doesn't cover. A provider slot frees when
+    // the connection drops (there is no unregister op).
+    provide(method, handler) {
+      providers.set(method, handler);
+      if (connected) {
+        try { ws.send(JSON.stringify({ op: 'register', methods: [method] })); } catch {}
+      }
     },
     on(type, cb) {
       if (!listeners.has(type)) listeners.set(type, new Set());

@@ -433,7 +433,10 @@ function projectsFromHostConfig(hostProjects, pluginId) {
     const mine = ((entry && entry.plugins) || {})[pluginId] || {};
     const prefix = String(mine.prefix || '').trim();
     if (!prefix) continue;
-    out.push({ dir, prefix, jql: String(mine.jql || '').trim() });
+    // projectJql is the current setting key; `jql` is the pre-1.4.0 name it
+    // clashed with (duplicate of the global setting key — the manifest never
+    // validated), kept as a read fallback for rows written before the rename.
+    out.push({ dir, prefix, jql: String(mine.projectJql || mine.jql || '').trim() });
   }
   return normalizeProjects(out);
 }
@@ -996,3 +999,45 @@ server.listen(PORT, '127.0.0.1', () => log('pane on http://127.0.0.1:' + PORT));
 
 pollNow();
 setInterval(() => pollNow(), conf().pollSeconds * 1000);
+
+// ── Facade tools (manifest `tools` → agents' mcp__workspacer__* surface) ─────
+// The hub routes a granted agent's tool call here as a plain bus call of the
+// `provides` method. Handlers return raw data — the caller is a model, not the
+// pane — and errors become the caller's error reply verbatim.
+
+const TOOL_MAX_RESULTS = 50;
+
+wks.provide('djtouchette.jira.search', async (params) => {
+  const c = conf();
+  if (!isConfigured(c)) throw new Error('jira plugin is not configured (baseUrl/email/apiToken)');
+  const p = params || {};
+  const jql = String(p.jql || '').trim() || c.jql;
+  const max = Math.max(1, Math.min(TOOL_MAX_RESULTS, Number(p.maxResults) || 20));
+  const q = 'jql=' + encodeURIComponent(jql) + '&fields=' + FIELDS + '&maxResults=' + max;
+  let data;
+  try {
+    data = await jiraGet(c, '/rest/api/3/search/jql?' + q);
+  } catch (e) {
+    if (e.status !== 404 && e.status !== 410) throw e;
+    data = await jiraGet(c, '/rest/api/3/search?' + q);
+  }
+  const issues = (data.issues || []).map((i) => normalize(i, c.baseUrl));
+  return { jql, total: issues.length, issues };
+});
+
+wks.provide('djtouchette.jira.issue', async (params) => {
+  const c = conf();
+  if (!isConfigured(c)) throw new Error('jira plugin is not configured (baseUrl/email/apiToken)');
+  const key = String((params || {}).key || '').trim();
+  if (!/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(key)) throw new Error('invalid issue key: ' + key);
+  const data = await jiraGet(
+    c,
+    '/rest/api/3/issue/' + encodeURIComponent(key) + '?fields=' + FIELDS,
+  );
+  const issue = normalize(data, c.baseUrl);
+  let comments = [];
+  try {
+    comments = await fetchComments(key);
+  } catch { /* the issue itself is still useful without its thread */ }
+  return { ...issue, description: adfToText((data.fields || {}).description).trim(), comments };
+});
